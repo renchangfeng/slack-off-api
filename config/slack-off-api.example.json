@@ -1,0 +1,21 @@
+{
+  "rateLimits": {
+    "global": { "max": 120, "timeWindow": "1 minute" },
+    "otp": { "max": 5, "timeWindow": "15 minutes" },
+    "checkIns": { "max": 30, "timeWindow": "1 minute" },
+    "activities": { "max": 30, "timeWindow": "1 minute" },
+    "beanDraws": { "max": 10, "timeWindow": "1 minute" },
+    "leaderboardReads": { "max": 120, "timeWindow": "1 minute" },
+    "profileUpdates": { "max": 10, "timeWindow": "1 minute" }
+  },
+  "auth": {
+    "requireEmailVerified": false
+  },
+  "checkIns": {
+    "minRewardDurationSeconds": 60,
+    "maxSessionSeconds": 2700,
+    "dailyRewardedSessionCap": 5,
+    "scorePerEligibleMinute": 1,
+    "drawProgressPerSession": 1
+  }
+}

@@ -1,0 +1,321 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CheckInStatus {
+  active
+  completed
+  cancelled
+  invalidated
+}
+
+enum LeaderboardWindow {
+  daily
+  weekly
+  monthly
+  all_time
+}
+
+enum BeanRarity {
+  common
+  uncommon
+  rare
+  epic
+  legendary
+}
+
+enum RewardSourceType {
+  check_in
+  activity
+  achievement
+  admin
+}
+
+enum RewardType {
+  score
+  draw_progress
+  draw_chance
+  bean
+  cosmetic
+}
+
+enum AchievementRuleType {
+  first_checkin
+  streak
+  total_duration
+  activity_count
+  collection_count
+}
+
+enum CosmeticType {
+  badge
+  title
+}
+
+enum ActivityCategory {
+  game
+  rest
+  office_theater
+  absurd
+  tiny_task
+}
+
+enum ActivityDifficulty {
+  easy
+  normal
+  hard
+}
+
+enum ActivityAssignmentStatus {
+  active
+  completed
+  skipped
+  expired
+}
+
+model User {
+  id                  String               @id @default(uuid()) @db.Uuid
+  authSubject         String               @unique @map("auth_subject")
+  email               String?              @unique
+  displayName         String               @map("display_name")
+  avatarUrl           String?              @map("avatar_url")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+  deletedAt           DateTime?            @map("deleted_at")
+  profile             UserProfile?
+  stats               UserStats?
+  checkInSessions     CheckInSession[]
+  leaderboardScores   LeaderboardScore[]
+  rewardLedger        RewardLedger[]
+  beanInventory       BeanInventory[]
+  achievements        UserAchievement[]
+  cosmetics           UserCosmetic[]
+  activityAssignments ActivityAssignment[]
+  actorAuditEvents    AuditEvent[]         @relation("AuditActor")
+  targetAuditEvents   AuditEvent[]         @relation("AuditTarget")
+
+  @@map("users")
+}
+
+model UserProfile {
+  userId          String    @id @map("user_id") @db.Uuid
+  bio             String?
+  equippedBadgeId String?   @map("equipped_badge_id") @db.Uuid
+  equippedTitleId String?   @map("equipped_title_id") @db.Uuid
+  privacyMode     String    @default("public_alias") @map("privacy_mode")
+  timezone        String?
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  user            User      @relation(fields: [userId], references: [id])
+  equippedBadge   Cosmetic? @relation("EquippedBadge", fields: [equippedBadgeId], references: [id])
+  equippedTitle   Cosmetic? @relation("EquippedTitle", fields: [equippedTitleId], references: [id])
+
+  @@map("user_profiles")
+}
+
+model CheckInSession {
+  id                      String        @id @default(uuid()) @db.Uuid
+  userId                  String        @map("user_id") @db.Uuid
+  startedAt               DateTime      @map("started_at")
+  endedAt                 DateTime?     @map("ended_at")
+  durationSeconds         Int?          @map("duration_seconds")
+  eligibleDurationSeconds Int?          @map("eligible_duration_seconds")
+  status                  CheckInStatus
+  invalidReason           String?       @map("invalid_reason")
+  rewarded                Boolean       @default(false)
+  idempotencyKey          String?       @unique @map("idempotency_key")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
+  user                    User          @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([userId, status])
+  @@map("check_in_sessions")
+}
+
+model UserStats {
+  userId                  String    @id @map("user_id") @db.Uuid
+  totalSessions           Int       @default(0) @map("total_sessions")
+  totalDurationSeconds    Int       @default(0) @map("total_duration_seconds")
+  eligibleDurationSeconds Int       @default(0) @map("eligible_duration_seconds")
+  currentStreakDays       Int       @default(0) @map("current_streak_days")
+  longestStreakDays       Int       @default(0) @map("longest_streak_days")
+  lastEligibleCheckinDate DateTime? @map("last_eligible_checkin_date") @db.Date
+  drawChances             Int       @default(0) @map("draw_chances")
+  drawProgress            Int       @default(0) @map("draw_progress")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+  user                    User      @relation(fields: [userId], references: [id])
+
+  @@map("user_stats")
+}
+
+model LeaderboardScore {
+  id          String            @id @default(uuid()) @db.Uuid
+  userId      String            @map("user_id") @db.Uuid
+  window      LeaderboardWindow
+  windowStart DateTime          @map("window_start")
+  score       Int               @default(0)
+  rankCache   Int?              @map("rank_cache")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+  user        User              @relation(fields: [userId], references: [id])
+
+  @@unique([userId, window, windowStart])
+  @@index([window, windowStart, score])
+  @@map("leaderboard_scores")
+}
+
+model BeanDefinition {
+  id          String          @id @default(uuid()) @db.Uuid
+  code        String          @unique
+  name        String
+  rarity      BeanRarity
+  description String
+  imageKey    String?         @map("image_key")
+  active      Boolean         @default(true)
+  weight      Int
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+  inventory   BeanInventory[]
+
+  @@map("bean_definitions")
+}
+
+model BeanInventory {
+  userId          String         @map("user_id") @db.Uuid
+  beanId          String         @map("bean_id") @db.Uuid
+  quantity        Int            @default(0)
+  firstObtainedAt DateTime       @map("first_obtained_at")
+  lastObtainedAt  DateTime       @map("last_obtained_at")
+  user            User           @relation(fields: [userId], references: [id])
+  bean            BeanDefinition @relation(fields: [beanId], references: [id])
+
+  @@id([userId, beanId])
+  @@map("bean_inventory")
+}
+
+model RewardLedger {
+  id             String           @id @default(uuid()) @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  sourceType     RewardSourceType @map("source_type")
+  sourceId       String?          @map("source_id") @db.Uuid
+  rewardType     RewardType       @map("reward_type")
+  amount         Int
+  metadata       Json
+  idempotencyKey String?          @unique @map("idempotency_key")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  user           User             @relation(fields: [userId], references: [id])
+
+  @@index([userId, sourceType])
+  @@map("reward_ledger")
+}
+
+model Achievement {
+  id           String              @id @default(uuid()) @db.Uuid
+  code         String              @unique
+  name         String
+  description  String
+  ruleType     AchievementRuleType @map("rule_type")
+  ruleConfig   Json                @map("rule_config")
+  rewardConfig Json                @map("reward_config")
+  active       Boolean             @default(true)
+  users        UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  userId          String      @map("user_id") @db.Uuid
+  achievementId   String      @map("achievement_id") @db.Uuid
+  unlockedAt      DateTime    @map("unlocked_at")
+  rewardClaimedAt DateTime?   @map("reward_claimed_at")
+  user            User        @relation(fields: [userId], references: [id])
+  achievement     Achievement @relation(fields: [achievementId], references: [id])
+
+  @@id([userId, achievementId])
+  @@map("user_achievements")
+}
+
+model Cosmetic {
+  id                    String         @id @default(uuid()) @db.Uuid
+  code                  String         @unique
+  name                  String
+  description           String
+  cosmeticType          CosmeticType   @map("cosmetic_type")
+  rarity                BeanRarity
+  active                Boolean        @default(true)
+  users                 UserCosmetic[]
+  equippedBadgeProfiles UserProfile[]  @relation("EquippedBadge")
+  equippedTitleProfiles UserProfile[]  @relation("EquippedTitle")
+
+  @@map("cosmetics")
+}
+
+model UserCosmetic {
+  userId     String           @map("user_id") @db.Uuid
+  cosmeticId String           @map("cosmetic_id") @db.Uuid
+  unlockedAt DateTime         @map("unlocked_at")
+  sourceType RewardSourceType @map("source_type")
+  user       User             @relation(fields: [userId], references: [id])
+  cosmetic   Cosmetic         @relation(fields: [cosmeticId], references: [id])
+
+  @@id([userId, cosmeticId])
+  @@map("user_cosmetics")
+}
+
+model ActivityTemplate {
+  id               String               @id @default(uuid()) @db.Uuid
+  code             String               @unique
+  title            String
+  description      String
+  category         ActivityCategory
+  difficulty       ActivityDifficulty
+  rewardConfig     Json                 @map("reward_config")
+  cooldownSeconds  Int                  @map("cooldown_seconds")
+  dailyRewardLimit Int                  @map("daily_reward_limit")
+  active           Boolean              @default(true)
+  assignments      ActivityAssignment[]
+
+  @@map("activity_templates")
+}
+
+model ActivityAssignment {
+  id             String                   @id @default(uuid()) @db.Uuid
+  userId         String                   @map("user_id") @db.Uuid
+  templateId     String                   @map("template_id") @db.Uuid
+  status         ActivityAssignmentStatus
+  assignedAt     DateTime                 @map("assigned_at")
+  completedAt    DateTime?                @map("completed_at")
+  expiresAt      DateTime?                @map("expires_at")
+  rewarded       Boolean                  @default(false)
+  idempotencyKey String?                  @unique @map("idempotency_key")
+  user           User                     @relation(fields: [userId], references: [id])
+  template       ActivityTemplate         @relation(fields: [templateId], references: [id])
+
+  @@index([userId, status])
+  @@map("activity_assignments")
+}
+
+model AuditEvent {
+  id           String   @id @default(uuid()) @db.Uuid
+  eventType    String   @map("event_type")
+  actorUserId  String?  @map("actor_user_id") @db.Uuid
+  targetUserId String?  @map("target_user_id") @db.Uuid
+  requestId    String?  @map("request_id")
+  traceId      String?  @map("trace_id")
+  spanId       String?  @map("span_id")
+  sourceType   String?  @map("source_type")
+  sourceId     String?  @map("source_id") @db.Uuid
+  metadata     Json
+  createdAt    DateTime @default(now()) @map("created_at")
+  actorUser    User?    @relation("AuditActor", fields: [actorUserId], references: [id])
+  targetUser   User?    @relation("AuditTarget", fields: [targetUserId], references: [id])
+
+  @@index([traceId])
+  @@index([eventType, createdAt])
+  @@map("audit_events")
+}

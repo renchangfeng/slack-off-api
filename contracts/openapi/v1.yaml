@@ -1,0 +1,412 @@
+openapi: 3.1.0
+info:
+  title: Slack Off API
+  version: 0.1.0
+servers:
+  - url: http://localhost:3000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+    TraceId:
+      name: X-Trace-Id
+      in: header
+      required: false
+      schema:
+        type: string
+  schemas:
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        traceId:
+          type: string
+    Health:
+      type: object
+      required: [ok, service, requestId, traceId]
+      properties:
+        ok:
+          type: boolean
+        service:
+          type: string
+        requestId:
+          type: string
+        traceId:
+          type: string
+    UserSummary:
+      type: object
+      required: [id, displayName, stats]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        equippedBadge:
+          type: [string, "null"]
+        equippedTitle:
+          type: [string, "null"]
+        stats:
+          type: object
+          required: [totalSessions, currentStreakDays, drawChances, drawProgress]
+          properties:
+            totalSessions:
+              type: integer
+            currentStreakDays:
+              type: integer
+            drawChances:
+              type: integer
+            drawProgress:
+              type: integer
+    CheckInSession:
+      type: object
+      required: [id, status, startedAt, endedAt, durationSeconds, eligibleDurationSeconds, rewarded]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, completed, cancelled, invalidated]
+        startedAt:
+          type: string
+          format: date-time
+        endedAt:
+          type: [string, "null"]
+          format: date-time
+        durationSeconds:
+          type: [integer, "null"]
+        eligibleDurationSeconds:
+          type: [integer, "null"]
+        rewarded:
+          type: boolean
+    CheckInFinishResult:
+      type: object
+      required: [session, reward]
+      properties:
+        session:
+          $ref: "#/components/schemas/CheckInSession"
+        reward:
+          type: object
+          required: [score, drawProgress, rewarded]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+            rewarded:
+              type: boolean
+    RewardSummary:
+      type: object
+      required: [score, drawProgressGranted, drawProgress, drawChancesGranted, achievementsUnlocked]
+      properties:
+        score:
+          type: integer
+        drawProgressGranted:
+          type: integer
+        drawProgress:
+          type: integer
+        drawChancesGranted:
+          type: integer
+        achievementsUnlocked:
+          type: array
+          items:
+            type: string
+    LeaderboardItem:
+      type: object
+      required: [rank, userId, displayName, score]
+      properties:
+        rank:
+          type: integer
+        userId:
+          type: string
+        displayName:
+          type: string
+        equippedBadge:
+          type: [string, "null"]
+        equippedTitle:
+          type: [string, "null"]
+        score:
+          type: integer
+    LeaderboardResponse:
+      type: object
+      required: [window, windowStart, items, currentUser]
+      properties:
+        window:
+          type: string
+          enum: [daily, weekly, monthly, all_time]
+        windowStart:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LeaderboardItem"
+        currentUser:
+          anyOf:
+            - $ref: "#/components/schemas/LeaderboardItem"
+            - type: "null"
+    Bean:
+      type: object
+      required: [id, name, rarity, quantity, owned]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+        quantity:
+          type: integer
+        owned:
+          type: boolean
+    ActivityAssignment:
+      type: object
+      required: [assignmentId, title, description, difficulty, rewardPreview, expiresAt]
+      properties:
+        assignmentId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        difficulty:
+          type: string
+          enum: [easy, normal, hard]
+        rewardPreview:
+          type: object
+          required: [score, drawProgress]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+        expiresAt:
+          type: string
+          format: date-time
+paths:
+  /health:
+    get:
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      responses:
+        "200":
+          description: Service health
+  /v1/auth/me:
+    get:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user profile summary
+  /v1/me/profile:
+    patch:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Updated profile
+  /v1/check-ins:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                idempotencyKey:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        "200":
+          description: Started check-in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CheckInSession"
+                  error:
+                    type: "null"
+        "409":
+          description: Active check-in already exists
+  /v1/check-ins/{id}/finish:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                idempotencyKey:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+      responses:
+        "200":
+          description: Finished check-in with rewards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CheckInFinishResult"
+                  error:
+                    type: "null"
+        "404":
+          description: Check-in not found
+  /v1/check-ins/active:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      responses:
+        "200":
+          description: Active check-in or null
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    anyOf:
+                      - $ref: "#/components/schemas/CheckInSession"
+                      - type: "null"
+                  error:
+                    type: "null"
+  /v1/leaderboards:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: window
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, all_time]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+      responses:
+        "200":
+          description: Leaderboard page and current user rank context
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/LeaderboardResponse"
+                  error:
+                    type: "null"
+  /v1/beans/collection:
+    get:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User bean collection
+  /v1/beans/draw:
+    post:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Bean draw result
+  /v1/achievements:
+    get:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Achievement list
+  /v1/cosmetics:
+    get:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Owned cosmetics
+  /cosmetics/{id}/equip:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Equipped cosmetic
+  /activities/random:
+    post:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Assigned random activity
+  /activities/{assignmentId}/complete:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: assignmentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Activity completion result
