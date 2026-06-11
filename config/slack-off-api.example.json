@@ -17,5 +17,8 @@
     "dailyRewardedSessionCap": 5,
     "scorePerEligibleMinute": 1,
     "drawProgressPerSession": 1
+  },
+  "beans": {
+    "drawProgressPerChance": 3
   }
 }

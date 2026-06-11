@@ -25,6 +25,9 @@ const runtimeConfigSchema = z.object({
     dailyRewardedSessionCap: z.number().int().positive(),
     scorePerEligibleMinute: z.number().int().positive(),
     drawProgressPerSession: z.number().int().nonnegative()
+  }),
+  beans: z.object({
+    drawProgressPerChance: z.number().int().positive()
   })
 });
 
@@ -50,6 +53,9 @@ const defaults: RuntimeConfig = {
     dailyRewardedSessionCap: 5,
     scorePerEligibleMinute: 1,
     drawProgressPerSession: 1
+  },
+  beans: {
+    drawProgressPerChance: 3
   }
 };
 

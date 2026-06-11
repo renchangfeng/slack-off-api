@@ -33,6 +33,7 @@ enum RewardSourceType {
   check_in
   activity
   achievement
+  bean_draw
   admin
 }
 

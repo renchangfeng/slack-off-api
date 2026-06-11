@@ -107,6 +107,8 @@ components:
               type: integer
             drawProgress:
               type: integer
+            drawChancesGranted:
+              type: integer
             rewarded:
               type: boolean
     RewardSummary:
@@ -161,19 +163,46 @@ components:
             - type: "null"
     Bean:
       type: object
-      required: [id, name, rarity, quantity, owned]
+      required: [id, code, name, rarity, description, quantity, owned]
       properties:
         id:
+          type: string
+          format: uuid
+        code:
           type: string
         name:
           type: string
         rarity:
           type: string
           enum: [common, uncommon, rare, epic, legendary]
+        description:
+          type: string
         quantity:
           type: integer
         owned:
           type: boolean
+    BeanCollection:
+      type: object
+      required: [drawChances, drawProgress, beans]
+      properties:
+        drawChances:
+          type: integer
+        drawProgress:
+          type: integer
+        beans:
+          type: array
+          items:
+            $ref: "#/components/schemas/Bean"
+    BeanDrawResult:
+      type: object
+      required: [bean, duplicate, remainingDrawChances]
+      properties:
+        bean:
+          $ref: "#/components/schemas/Bean"
+        duplicate:
+          type: boolean
+        remainingDrawChances:
+          type: integer
     ActivityAssignment:
       type: object
       required: [assignmentId, title, description, difficulty, rewardPreview, expiresAt]
@@ -353,16 +382,56 @@ paths:
     get:
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
       responses:
         "200":
           description: User bean collection
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BeanCollection"
+                  error:
+                    type: "null"
   /v1/beans/draw:
     post:
       security:
         - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                idempotencyKey:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
       responses:
         "200":
           description: Bean draw result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/BeanDrawResult"
+                  error:
+                    type: "null"
+        "409":
+          description: No draw chance available
   /v1/achievements:
     get:
       security:

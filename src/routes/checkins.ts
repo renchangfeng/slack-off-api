@@ -1,4 +1,4 @@
-import { CheckInStatus, RewardSourceType, RewardType } from "@prisma/client";
+import { CheckInStatus, RewardSourceType, RewardType, type Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { ok } from "../http/envelope.js";
@@ -224,6 +224,7 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
         ? Math.max(1, Math.floor(eligibleDurationSeconds / 60) * rules.scorePerEligibleMinute)
         : 0;
       const drawProgress = rewarded ? rules.drawProgressPerSession : 0;
+      let drawChancesGranted = 0;
       const status =
         rawDurationSeconds > rules.maxSessionSeconds
           ? CheckInStatus.invalidated
@@ -242,6 +243,12 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
           where: { userId: request.user!.id }
         });
         const streak = nextStreak(existingStats, rewarded, now);
+        const draw = nextDrawState(
+          existingStats?.drawProgress ?? 0,
+          drawProgress,
+          server.runtimeConfig.beans.drawProgressPerChance
+        );
+        drawChancesGranted = draw.chancesGranted;
         const updated = await tx.checkInSession.update({
           where: { id: session.id },
           data: {
@@ -264,7 +271,8 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
             currentStreakDays: rewarded ? 1 : 0,
             longestStreakDays: rewarded ? 1 : 0,
             lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined,
-            drawProgress
+            drawProgress: draw.remainingProgress,
+            drawChances: draw.chancesGranted
           },
           update: {
             totalSessions: { increment: 1 },
@@ -272,31 +280,45 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
             eligibleDurationSeconds: { increment: eligibleDurationSeconds },
             currentStreakDays: streak.currentStreakDays,
             longestStreakDays: streak.longestStreakDays,
-            drawProgress: { increment: drawProgress },
+            drawProgress: draw.remainingProgress,
+            drawChances: { increment: draw.chancesGranted },
             lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined
           }
         });
 
         if (rewarded) {
+          const rewardRows: Prisma.RewardLedgerCreateManyInput[] = [
+            {
+              userId: request.user!.id,
+              sourceType: RewardSourceType.check_in,
+              sourceId: session.id,
+              rewardType: RewardType.score,
+              amount: score,
+              metadata: rewardMetadata(request, eligibleDurationSeconds)
+            },
+            {
+              userId: request.user!.id,
+              sourceType: RewardSourceType.check_in,
+              sourceId: session.id,
+              rewardType: RewardType.draw_progress,
+              amount: drawProgress,
+              metadata: rewardMetadata(request, eligibleDurationSeconds)
+            }
+          ];
+
+          if (draw.chancesGranted > 0) {
+            rewardRows.push({
+              userId: request.user!.id,
+              sourceType: RewardSourceType.check_in,
+              sourceId: session.id,
+              rewardType: RewardType.draw_chance,
+              amount: draw.chancesGranted,
+              metadata: rewardMetadata(request, eligibleDurationSeconds)
+            });
+          }
+
           await tx.rewardLedger.createMany({
-            data: [
-              {
-                userId: request.user!.id,
-                sourceType: RewardSourceType.check_in,
-                sourceId: session.id,
-                rewardType: RewardType.score,
-                amount: score,
-                metadata: rewardMetadata(request, eligibleDurationSeconds)
-              },
-              {
-                userId: request.user!.id,
-                sourceType: RewardSourceType.check_in,
-                sourceId: session.id,
-                rewardType: RewardType.draw_progress,
-                amount: drawProgress,
-                metadata: rewardMetadata(request, eligibleDurationSeconds)
-              }
-            ]
+            data: rewardRows
           });
           await incrementLeaderboardScores(tx, {
             userId: request.user!.id,
@@ -319,7 +341,12 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
           eligibleDurationSeconds,
           status,
           invalidReason,
-          reward: { score, drawProgress, rewarded }
+          reward: {
+            score,
+            drawProgress,
+            drawChancesGranted,
+            rewarded
+          }
         },
         trace: request.trace
       });
@@ -341,10 +368,22 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
 
       return ok({
         session: serializeSession(finished),
-        reward: { score, drawProgress, rewarded }
+        reward: { score, drawProgress, drawChancesGranted, rewarded }
       });
     }
   );
+}
+
+function nextDrawState(
+  currentProgress: number,
+  progressGranted: number,
+  progressPerChance: number
+) {
+  const totalProgress = currentProgress + progressGranted;
+  return {
+    chancesGranted: Math.floor(totalProgress / progressPerChance),
+    remainingProgress: totalProgress % progressPerChance
+  };
 }
 
 function serializeSession(session: {

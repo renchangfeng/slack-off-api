@@ -29,6 +29,9 @@ const runtimeConfig: RuntimeConfig = {
     dailyRewardedSessionCap: 5,
     scorePerEligibleMinute: 1,
     drawProgressPerSession: 1
+  },
+  beans: {
+    drawProgressPerChance: 3
   }
 };
 
@@ -95,6 +98,7 @@ describe("check-in routes", () => {
     expect(body.data.reward).toEqual({
       score: 0,
       drawProgress: 0,
+      drawChancesGranted: 0,
       rewarded: false
     });
     expect(store.rewardLedger).toHaveLength(0);
