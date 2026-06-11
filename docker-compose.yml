@@ -1,0 +1,44 @@
+services:
+  api:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      LOG_LEVEL: info
+      CONFIG_SOURCE: env
+      DATABASE_URL: postgresql://slack_off:slack_off@postgres:5432/slack_off
+      REDIS_URL: redis://redis:6379
+      SUPABASE_JWT_SECRET: dev-secret-change-me
+    ports:
+      - "3000:3000"
+    command: sh -c "npm run db:migrate:deploy && npm run start:prod"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: slack_off
+      POSTGRES_PASSWORD: slack_off
+      POSTGRES_DB: slack_off
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slack_off -d slack_off"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres-data:
