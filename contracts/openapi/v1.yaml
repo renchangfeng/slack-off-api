@@ -111,6 +111,10 @@ components:
               type: integer
             rewarded:
               type: boolean
+            achievementsUnlocked:
+              type: array
+              items:
+                $ref: "#/components/schemas/AchievementUnlock"
     RewardSummary:
       type: object
       required: [score, drawProgressGranted, drawProgress, drawChancesGranted, achievementsUnlocked]
@@ -203,6 +207,121 @@ components:
           type: boolean
         remainingDrawChances:
           type: integer
+        achievementsUnlocked:
+          type: array
+          items:
+            $ref: "#/components/schemas/AchievementUnlock"
+    AchievementUnlock:
+      type: object
+      required: [id, code, name, unlockedAt, rewards]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        unlockedAt:
+          type: string
+          format: date-time
+        rewards:
+          type: object
+          required: [score, drawProgress, drawChances, cosmetic]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+            drawChances:
+              type: integer
+            cosmetic:
+              type: [string, "null"]
+    Achievement:
+      type: object
+      required: [id, code, name, description, ruleType, rewardConfig, unlockedAt, rewardClaimedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        ruleType:
+          type: string
+          enum: [first_checkin, streak, total_duration, activity_count, collection_count, weekly_top_rank]
+        rewardConfig:
+          type: object
+          additionalProperties: true
+        unlockedAt:
+          type: [string, "null"]
+          format: date-time
+        rewardClaimedAt:
+          type: [string, "null"]
+          format: date-time
+    AchievementList:
+      type: object
+      required: [achievements]
+      properties:
+        achievements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Achievement"
+    Cosmetic:
+      type: object
+      required: [id, code, name, description, cosmeticType, rarity]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        cosmeticType:
+          type: string
+          enum: [badge, title]
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+    OwnedCosmetic:
+      allOf:
+        - $ref: "#/components/schemas/Cosmetic"
+        - type: object
+          required: [unlockedAt, equipped]
+          properties:
+            unlockedAt:
+              type: string
+              format: date-time
+            equipped:
+              type: boolean
+    CosmeticInventory:
+      type: object
+      required: [equippedBadge, equippedTitle, cosmetics]
+      properties:
+        equippedBadge:
+          anyOf:
+            - $ref: "#/components/schemas/Cosmetic"
+            - type: "null"
+        equippedTitle:
+          anyOf:
+            - $ref: "#/components/schemas/Cosmetic"
+            - type: "null"
+        cosmetics:
+          type: array
+          items:
+            $ref: "#/components/schemas/OwnedCosmetic"
+    CosmeticEquipResult:
+      type: object
+      required: [cosmetic]
+      properties:
+        cosmetic:
+          $ref: "#/components/schemas/Cosmetic"
     ActivityAssignment:
       type: object
       required: [assignmentId, title, description, difficulty, rewardPreview, expiresAt]
@@ -439,6 +558,16 @@ paths:
       responses:
         "200":
           description: Achievement list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/AchievementList"
+                  error:
+                    type: "null"
   /v1/cosmetics:
     get:
       security:
@@ -446,7 +575,17 @@ paths:
       responses:
         "200":
           description: Owned cosmetics
-  /cosmetics/{id}/equip:
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CosmeticInventory"
+                  error:
+                    type: "null"
+  /v1/cosmetics/{id}/equip:
     post:
       security:
         - bearerAuth: []
@@ -459,6 +598,16 @@ paths:
       responses:
         "200":
           description: Equipped cosmetic
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CosmeticEquipResult"
+                  error:
+                    type: "null"
   /activities/random:
     post:
       security:

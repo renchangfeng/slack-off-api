@@ -1,5 +1,6 @@
 import { RewardSourceType, RewardType, type BeanDefinition, type BeanInventory } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
+import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { fail, ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
@@ -168,10 +169,17 @@ export async function registerBeanRoutes(server: FastifyInstance) {
         trace: request.trace
       });
 
+      const achievementsUnlocked = await evaluateAchievements(server.prisma, {
+        userId: request.user!.id,
+        now,
+        trace: request.trace
+      });
+
       return ok({
         bean: serializeBean({ ...selected, inventory: [{ quantity: result.inventory.quantity }] }),
         duplicate: result.duplicate,
-        remainingDrawChances: result.remainingDrawChances
+        remainingDrawChances: result.remainingDrawChances,
+        achievementsUnlocked
       });
     }
   );

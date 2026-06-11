@@ -99,7 +99,8 @@ describe("check-in routes", () => {
       score: 0,
       drawProgress: 0,
       drawChancesGranted: 0,
-      rewarded: false
+      rewarded: false,
+      achievementsUnlocked: []
     });
     expect(store.rewardLedger).toHaveLength(0);
     expect(store.sessions.get(session.id)).toMatchObject({
@@ -144,7 +145,9 @@ describe("check-in routes", () => {
       displayName: "榜一大哥",
       window: LeaderboardWindow.daily,
       windowStart,
-      score: 20
+      score: 20,
+      equippedBadge: "摸鱼大王",
+      equippedTitle: "工位哲学家"
     });
     store.addLeaderboardScore({
       userId,
@@ -166,6 +169,8 @@ describe("check-in routes", () => {
     expect(payload.data.items[0]).toMatchObject({
       rank: 1,
       displayName: "榜一大哥",
+      equippedBadge: "摸鱼大王",
+      equippedTitle: "工位哲学家",
       score: 20
     });
     expect(payload.data.currentUser).toMatchObject({
@@ -242,6 +247,8 @@ function createStore() {
     window: string;
     windowStart: Date;
     score: number;
+    equippedBadge?: string | null;
+    equippedTitle?: string | null;
   }> = [];
   const auditEvents: Array<Record<string, unknown>> = [];
 
@@ -276,6 +283,8 @@ function createStore() {
       window: string;
       windowStart: Date;
       score: number;
+      equippedBadge?: string | null;
+      equippedTitle?: string | null;
     }) {
       leaderboardScores.push(input);
       return input;
@@ -351,6 +360,18 @@ function createPrismaMock(store: TestStore) {
         return next;
       }
     },
+    achievement: {
+      findMany: async () => []
+    },
+    userAchievement: {
+      findMany: async () => []
+    },
+    beanInventory: {
+      count: async () => 0
+    },
+    activityAssignment: {
+      count: async () => 0
+    },
     rewardLedger: {
       createMany: async ({ data }: { data: unknown[] }) => {
         store.rewardLedger.push(...data);
@@ -395,7 +416,9 @@ function createPrismaMock(store: TestStore) {
 
         const score = {
           ...create,
-          displayName: create.userId === userId ? "tester" : "榜一大哥"
+          displayName: create.userId === userId ? "tester" : "榜一大哥",
+          equippedBadge: null,
+          equippedTitle: null
         };
         store.leaderboardScores.push(score);
         return score;
@@ -462,6 +485,8 @@ function serializeLeaderboardMock(score: {
   score: number;
   window: string;
   windowStart: Date;
+  equippedBadge?: string | null;
+  equippedTitle?: string | null;
 }) {
   return {
     ...score,
@@ -469,8 +494,8 @@ function serializeLeaderboardMock(score: {
     user: {
       displayName: score.displayName,
       profile: {
-        equippedBadge: null,
-        equippedTitle: null
+        equippedBadge: score.equippedBadge ? { name: score.equippedBadge } : null,
+        equippedTitle: score.equippedTitle ? { name: score.equippedTitle } : null
       }
     }
   };

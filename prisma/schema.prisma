@@ -51,6 +51,7 @@ enum AchievementRuleType {
   total_duration
   activity_count
   collection_count
+  weekly_top_rank
 }
 
 enum CosmeticType {

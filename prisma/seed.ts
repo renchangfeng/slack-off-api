@@ -79,7 +79,7 @@ const achievements = [
     description: "完成第一次打卡，恭喜你开始认真休息。",
     ruleType: AchievementRuleType.first_checkin,
     ruleConfig: { count: 1 },
-    rewardConfig: { score: 10, drawProgress: 1 }
+    rewardConfig: { score: 10, drawProgress: 1, cosmeticCode: "badge_paid_pooper" }
   },
   {
     code: "three_day_streak",
@@ -87,7 +87,31 @@ const achievements = [
     description: "连续三天记得给自己一点空隙。",
     ruleType: AchievementRuleType.streak,
     ruleConfig: { days: 3 },
-    rewardConfig: { score: 30, drawChance: 1 }
+    rewardConfig: { score: 30, drawChance: 1, cosmeticCode: "title_workplace_philosopher" }
+  },
+  {
+    code: "thirty_min_paid_rest",
+    name: "半小时人生赢家",
+    description: "累计 30 分钟有效休息，说明你已经掌握了工位呼吸法。",
+    ruleType: AchievementRuleType.total_duration,
+    ruleConfig: { minutes: 30 },
+    rewardConfig: { score: 20, drawProgress: 1 }
+  },
+  {
+    code: "bean_collection_starter",
+    name: "拼豆入门",
+    description: "收集 3 种不同的工位命运豆。",
+    ruleType: AchievementRuleType.collection_count,
+    ruleConfig: { count: 3 },
+    rewardConfig: { score: 25, drawChance: 1 }
+  },
+  {
+    code: "weekly_top_slacker",
+    name: "摸鱼大王",
+    description: "进入周榜前 10，短暂地向世界证明你很会休息。",
+    ruleType: AchievementRuleType.weekly_top_rank,
+    ruleConfig: { rank: 10 },
+    rewardConfig: { score: 50, cosmeticCode: "badge_slack_king" }
   },
   {
     code: "activity_starter",

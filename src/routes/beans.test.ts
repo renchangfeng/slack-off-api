@@ -245,6 +245,10 @@ function createPrismaMock(store: TestStore) {
       }
     },
     beanInventory: {
+      count: async ({ where }: { where: { userId: string; quantity: { gt: number } } }) =>
+        [...store.inventory.values()].filter(
+          (item) => item.userId === where.userId && item.quantity > where.quantity.gt
+        ).length,
       findUnique: async ({
         where
       }: {
@@ -273,6 +277,20 @@ function createPrismaMock(store: TestStore) {
         current.lastObtainedAt = update.lastObtainedAt;
         return current;
       }
+    },
+    achievement: {
+      findMany: async () => []
+    },
+    userAchievement: {
+      findMany: async () => []
+    },
+    activityAssignment: {
+      count: async () => 0
+    },
+    leaderboardScore: {
+      findUnique: async () => null,
+      count: async () => 0,
+      upsert: async () => null
     },
     rewardLedger: {
       create: async ({ data }: { data: Record<string, unknown> }) => {

@@ -12,6 +12,7 @@ import { registerInfra } from "./plugins/infra.js";
 import { registerObservability } from "./plugins/observability.js";
 import { createRequestId } from "./observability/ids.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerAchievementRoutes } from "./routes/achievements.js";
 import { registerBeanRoutes } from "./routes/beans.js";
 import { registerCheckInRoutes } from "./routes/checkins.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboards.js";
@@ -59,6 +60,7 @@ await server.register(registerAuthRoutes);
 await server.register(registerCheckInRoutes);
 await server.register(registerLeaderboardRoutes);
 await server.register(registerBeanRoutes);
+await server.register(registerAchievementRoutes);
 
 server.get("/health", async (request) => {
   return ok({

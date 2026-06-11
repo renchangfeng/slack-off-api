@@ -1,5 +1,6 @@
 import { CheckInStatus, RewardSourceType, RewardType, type Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
+import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
@@ -206,7 +207,13 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
       if (session.status !== CheckInStatus.active) {
         return ok({
           session: serializeSession(session),
-          reward: { score: 0, drawProgress: 0, rewarded: session.rewarded }
+          reward: {
+            score: 0,
+            drawProgress: 0,
+            drawChancesGranted: 0,
+            rewarded: session.rewarded,
+            achievementsUnlocked: []
+          }
         });
       }
 
@@ -366,9 +373,17 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
         });
       }
 
+      const achievementsUnlocked = rewarded
+        ? await evaluateAchievements(server.prisma, {
+            userId: request.user!.id,
+            now,
+            trace: request.trace
+          })
+        : [];
+
       return ok({
         session: serializeSession(finished),
-        reward: { score, drawProgress, drawChancesGranted, rewarded }
+        reward: { score, drawProgress, drawChancesGranted, rewarded, achievementsUnlocked }
       });
     }
   );
