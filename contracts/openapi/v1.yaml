@@ -324,10 +324,11 @@ components:
           $ref: "#/components/schemas/Cosmetic"
     ActivityAssignment:
       type: object
-      required: [assignmentId, title, description, difficulty, rewardPreview, expiresAt]
+      required: [assignmentId, title, description, difficulty, status, rewardPreview, assignedAt, completedAt, expiresAt, rewarded]
       properties:
         assignmentId:
           type: string
+          format: uuid
         title:
           type: string
         description:
@@ -335,6 +336,9 @@ components:
         difficulty:
           type: string
           enum: [easy, normal, hard]
+        status:
+          type: string
+          enum: [active, completed, skipped, expired]
         rewardPreview:
           type: object
           required: [score, drawProgress]
@@ -343,9 +347,41 @@ components:
               type: integer
             drawProgress:
               type: integer
-        expiresAt:
+        assignedAt:
           type: string
           format: date-time
+        completedAt:
+          type: [string, "null"]
+          format: date-time
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        rewarded:
+          type: boolean
+    ActivityCompleteResult:
+      type: object
+      required: [assignment, reward]
+      properties:
+        assignment:
+          $ref: "#/components/schemas/ActivityAssignment"
+        reward:
+          type: object
+          required: [score, drawProgress, drawChancesGranted, rewarded, reason, achievementsUnlocked]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+            drawChancesGranted:
+              type: integer
+            rewarded:
+              type: boolean
+            reason:
+              type: [string, "null"]
+            achievementsUnlocked:
+              type: array
+              items:
+                $ref: "#/components/schemas/AchievementUnlock"
 paths:
   /health:
     get:
@@ -608,14 +644,26 @@ paths:
                     $ref: "#/components/schemas/CosmeticEquipResult"
                   error:
                     type: "null"
-  /activities/random:
+  /v1/activities/random:
     post:
       security:
         - bearerAuth: []
       responses:
         "200":
           description: Assigned random activity
-  /activities/{assignmentId}/complete:
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityAssignment"
+                  error:
+                    type: "null"
+        "409":
+          description: No eligible activity available
+  /v1/activities/{assignmentId}/complete:
     post:
       security:
         - bearerAuth: []
@@ -625,6 +673,33 @@ paths:
           required: true
           schema:
             type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                idempotencyKey:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
       responses:
         "200":
           description: Activity completion result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityCompleteResult"
+                  error:
+                    type: "null"
+        "404":
+          description: Activity assignment not found
+        "409":
+          description: Activity expired
