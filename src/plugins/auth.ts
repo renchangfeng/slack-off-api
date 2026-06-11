@@ -50,7 +50,7 @@ async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
         id: payload.sub,
         authSubject: payload.sub,
         email: payload.email,
-        displayName: defaultDisplayName(payload.email),
+        displayName: defaultDisplayName(payload.sub),
         profile: {
           create: {
             privacyMode: "public_alias"
@@ -82,8 +82,9 @@ async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   }
 }
 
-function defaultDisplayName(email?: string): string {
-  return email?.split("@")[0] || "摸鱼新同学";
+function defaultDisplayName(authSubject: string): string {
+  const suffix = authSubject.replace(/-/g, "").slice(-6) || "000000";
+  return `摸鱼同学-${suffix}`;
 }
 
 declare module "fastify" {
