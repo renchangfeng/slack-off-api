@@ -1,8 +1,10 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 const secret = process.env.SUPABASE_JWT_SECRET ?? "dev-secret-change-me";
-const subject = process.env.DEV_AUTH_SUBJECT ?? randomUUID();
-const email = process.env.DEV_AUTH_EMAIL ?? "local-slacker@example.com";
+const subject = process.env.DEV_AUTH_SUBJECT ?? "11111111-1111-4111-8111-111111111111";
+const email =
+  process.env.DEV_AUTH_EMAIL ??
+  `local-slacker+${subject.replaceAll("-", "").slice(0, 12)}@example.com`;
 const expiresInSeconds = Number(process.env.DEV_AUTH_EXPIRES_IN_SECONDS ?? 60 * 60 * 24 * 30);
 const now = Math.floor(Date.now() / 1000);
 

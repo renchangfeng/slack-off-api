@@ -26,12 +26,18 @@ export async function registerObservability(server: FastifyInstance) {
   });
 
   server.addHook("onResponse", async (request, reply) => {
+    const trace = request.trace ?? {
+      requestId: request.id,
+      traceId: createTraceId(),
+      spanId: createSpanId()
+    };
+
     request.log.info({
       event: "api.request.completed",
-      request_id: request.trace.requestId,
-      trace_id: request.trace.traceId,
-      span_id: request.trace.spanId,
-      parent_span_id: request.trace.parentSpanId,
+      request_id: trace.requestId,
+      trace_id: trace.traceId,
+      span_id: trace.spanId,
+      parent_span_id: trace.parentSpanId,
       route: request.routeOptions.url,
       method: request.method,
       status_code: reply.statusCode,
