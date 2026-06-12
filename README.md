@@ -69,9 +69,11 @@ docker run --rm -p 3000:3000 --env-file .env slack-off-api
 Local smoke stack:
 
 ```bash
-docker compose up --build
-curl -i http://127.0.0.1:3000/health
+API_PORT=3001 docker compose up --build
+curl -i http://127.0.0.1:3001/health
 ```
+
+`API_PORT` controls the host port mapped to the API container. Redis is only exposed on the Docker Compose network by default, so it does not conflict with an existing host Redis on `6379`.
 
 ## Database Migrations
 
@@ -96,7 +98,7 @@ Before production migration:
 - confirm rollback notes for the release
 - run migration first in staging
 
-Use `npm run db:seed` only for controlled reference data such as beans, cosmetics, achievements, and activity templates. Do not run destructive resets against production.
+Use `npm run db:seed` only for controlled reference data such as beans, cosmetics, achievements, and activity templates. The seed script runs from TypeScript in local development and from compiled JavaScript in the production image. Do not run destructive resets against production.
 
 ## Logging And TraceId
 

@@ -16,7 +16,7 @@ services:
       REDIS_URL: redis://redis:6379
       SUPABASE_JWT_SECRET: dev-secret-change-me
     ports:
-      - "3000:3000"
+      - "${API_PORT:-3000}:3000"
     command: sh -c "npm run db:migrate:deploy && npm run start:prod"
 
   postgres:
@@ -37,8 +37,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
 
 volumes:
   postgres-data:
