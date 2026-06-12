@@ -12,6 +12,7 @@
     "prisma:generate": "prisma generate",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "sh -c 'if [ -f dist/prisma/seed.js ]; then node dist/prisma/seed.js; else tsx prisma/seed.ts; fi'",
+    "auth:dev-token": "node scripts/create-dev-token.mjs",
     "test": "vitest run --dir src"
   },
   "dependencies": {
