@@ -122,7 +122,7 @@ Trace lookup flow:
 
 ## Deployment Checklist
 
-1. Build image or compile with `npm run build`.
+1. Confirm CI passes `npm run build` and the Docker image build.
 2. Provide production env vars.
 3. Run `npm run db:migrate:deploy`.
 4. Start with `npm run start:prod`.
