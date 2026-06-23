@@ -112,6 +112,52 @@ describe("check-in routes", () => {
     await server.close();
   });
 
+  it("completes an over-limit session and caps only the rewarded duration", async () => {
+    const server = await buildTestServer(store);
+    const startedAt = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const session = store.addSession({ userId, startedAt });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/check-ins/${session.id}/finish`,
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "finish_capped_duration" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.reward).toMatchObject({
+      score: 45,
+      drawProgress: 1,
+      rewarded: true
+    });
+    expect(store.sessions.get(session.id)).toMatchObject({
+      durationSeconds: 2 * 60 * 60,
+      eligibleDurationSeconds: 45 * 60,
+      status: CheckInStatus.completed,
+      invalidReason: "REWARD_DURATION_CAPPED",
+      rewarded: true
+    });
+    expect(store.stats.get(userId)).toMatchObject({
+      totalDurationSeconds: 2 * 60 * 60,
+      eligibleDurationSeconds: 45 * 60,
+      currentStreakDays: 1
+    });
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "check_in.finished",
+          metadata: expect.objectContaining({
+            rawDurationSeconds: 2 * 60 * 60,
+            eligibleDurationSeconds: 45 * 60,
+            invalidReason: "REWARD_DURATION_CAPPED"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
   it("does not let a user finish another user's session", async () => {
     const server = await buildTestServer(store);
     const session = store.addSession({

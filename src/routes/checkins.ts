@@ -232,13 +232,10 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
         : 0;
       const drawProgress = rewarded ? rules.drawProgressPerSession : 0;
       let drawChancesGranted = 0;
-      const status =
-        rawDurationSeconds > rules.maxSessionSeconds
-          ? CheckInStatus.invalidated
-          : CheckInStatus.completed;
+      const status = CheckInStatus.completed;
       const invalidReason =
         rawDurationSeconds > rules.maxSessionSeconds
-          ? "MAX_DURATION_EXCEEDED"
+          ? "REWARD_DURATION_CAPPED"
           : dailyCapReached
             ? "DAILY_REWARD_CAP_REACHED"
             : eligibleDurationSeconds === 0
