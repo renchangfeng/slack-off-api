@@ -63,6 +63,8 @@ enum ActivityCategory {
   game
   rest
   office_theater
+  physical
+  imagination
   absurd
   tiny_task
 }

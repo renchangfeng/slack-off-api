@@ -55,9 +55,12 @@ describe("activity routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toMatchObject({
+      code: "match_three_rounds",
       title: "完成消消乐 3 关",
+      category: ActivityCategory.game,
       difficulty: ActivityDifficulty.normal,
       status: ActivityAssignmentStatus.active,
+      recommendationReason: "TRY_SOMETHING_NEW",
       rewardPreview: {
         score: 8,
         drawProgress: 1
@@ -72,6 +75,71 @@ describe("activity routes", () => {
         })
       ])
     );
+
+    await server.close();
+  });
+
+  it("returns a category-filtered catalog with cooldown state", async () => {
+    const server = await buildTestServer(store);
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/catalog?category=game",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      selectedCategory: "game",
+      categories: ["rest", "game", "office_theater", "physical", "imagination"],
+      items: [
+        {
+          code: "match_three_rounds",
+          category: "game",
+          eligible: false,
+          completedCount: 1
+        }
+      ]
+    });
+
+    await server.close();
+  });
+
+  it("returns recent activity history for the authenticated user", async () => {
+    const server = await buildTestServer(store);
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+    store.addAssignment({
+      userId: otherUserId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history?limit=5",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.items).toHaveLength(1);
+    expect(response.json().data.items[0]).toMatchObject({
+      code: "match_three_rounds",
+      category: "game",
+      status: "completed",
+      rewarded: true
+    });
 
     await server.close();
   });
@@ -339,11 +407,25 @@ function createPrismaMock(store: TestStore) {
         store.assignments.find(
           (assignment) => assignment.userId === where.userId && assignment.status === where.status
         ) ?? null,
-      findMany: async ({ where }: { where: { userId: string; templateId: { in: string[] } } }) =>
-        store.assignments.filter(
-          (assignment) =>
-            assignment.userId === where.userId && where.templateId.in.includes(assignment.templateId)
-        ),
+      findMany: async ({
+        where,
+        take
+      }: {
+        where: {
+          userId: string;
+          templateId?: { in: string[] };
+          status?: { in: ActivityAssignmentStatus[] };
+        };
+        take?: number;
+      }) =>
+        store.assignments
+          .filter(
+            (assignment) =>
+              assignment.userId === where.userId &&
+              (!where.templateId || where.templateId.in.includes(assignment.templateId)) &&
+              (!where.status || where.status.in.includes(assignment.status))
+          )
+          .slice(0, take),
       findUnique: async ({ where }: { where: { id: string } }) =>
         store.assignments.find((assignment) => assignment.id === where.id) ?? null,
       count: async ({

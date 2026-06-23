@@ -400,15 +400,20 @@ components:
           $ref: "#/components/schemas/Cosmetic"
     ActivityAssignment:
       type: object
-      required: [assignmentId, title, description, difficulty, status, rewardPreview, assignedAt, completedAt, expiresAt, rewarded]
+      required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, assignedAt, completedAt, expiresAt, rewarded]
       properties:
         assignmentId:
           type: string
           format: uuid
+        code:
+          type: string
         title:
           type: string
         description:
           type: string
+        category:
+          type: string
+          enum: [rest, game, office_theater, physical, imagination]
         difficulty:
           type: string
           enum: [easy, normal, hard]
@@ -434,6 +439,74 @@ components:
           format: date-time
         rewarded:
           type: boolean
+        recommendationReason:
+          type: string
+          enum: [PREFERRED_CATEGORY, TRY_SOMETHING_NEW, MATCHES_HISTORY, AVAILABLE_NOW, ACTIVE_ASSIGNMENT]
+    ActivityCatalogItem:
+      type: object
+      required: [templateId, code, title, description, category, difficulty, rewardPreview, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
+      properties:
+        templateId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [rest, game, office_theater, physical, imagination]
+        difficulty:
+          type: string
+          enum: [easy, normal, hard]
+        rewardPreview:
+          type: object
+          required: [score, drawProgress]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+        eligible:
+          type: boolean
+        cooldownRemainingSeconds:
+          type: integer
+          minimum: 0
+        completedCount:
+          type: integer
+          minimum: 0
+        lastCompletedAt:
+          type: [string, "null"]
+          format: date-time
+        checkedAt:
+          type: string
+          format: date-time
+    ActivityCatalog:
+      type: object
+      required: [selectedCategory, categories, items]
+      properties:
+        selectedCategory:
+          type: [string, "null"]
+          enum: [rest, game, office_theater, physical, imagination, null]
+        categories:
+          type: array
+          items:
+            type: string
+            enum: [rest, game, office_theater, physical, imagination]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityCatalogItem"
+    ActivityHistory:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityAssignment"
     ActivityCompleteResult:
       type: object
       required: [assignment, reward]
@@ -744,6 +817,17 @@ paths:
     post:
       security:
         - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                category:
+                  type: string
+                  enum: [rest, game, office_theater, physical, imagination]
       responses:
         "200":
           description: Assigned random activity
@@ -759,6 +843,56 @@ paths:
                     type: "null"
         "409":
           description: No eligible activity available
+  /v1/activities/catalog:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [rest, game, office_theater, physical, imagination]
+      responses:
+        "200":
+          description: Activity catalog with current eligibility
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityCatalog"
+                  error:
+                    type: "null"
+  /v1/activities/history:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        "200":
+          description: Recent activity completion history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityHistory"
+                  error:
+                    type: "null"
   /v1/activities/{assignmentId}/complete:
     post:
       security:

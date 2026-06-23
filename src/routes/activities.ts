@@ -2,6 +2,7 @@ import {
   ActivityAssignmentStatus,
   RewardSourceType,
   RewardType,
+  type ActivityCategory,
   type ActivityDifficulty,
   type ActivityTemplate,
   type Prisma
@@ -9,6 +10,13 @@ import {
 import type { FastifyInstance } from "fastify";
 import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
+import {
+  canonicalActivityCategories,
+  isCanonicalActivityCategory,
+  normalizeActivityCategory,
+  recommendActivity,
+  type CanonicalActivityCategory
+} from "../activities/recommendation.js";
 import { fail, ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
 import { incrementLeaderboardScores } from "./leaderboards.js";
@@ -19,6 +27,83 @@ type RewardConfig = {
 };
 
 export async function registerActivityRoutes(server: FastifyInstance) {
+  server.get(
+    "/v1/activities/catalog",
+    {
+      ...rateLimitFor(server, "activities"),
+      preHandler: [server.requireAuth],
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            category: {
+              type: "string",
+              enum: canonicalActivityCategories
+            }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const query = request.query as { category?: CanonicalActivityCategory };
+      const now = new Date();
+      const templates = await server.prisma.activityTemplate.findMany({
+        where: { active: true },
+        orderBy: { code: "asc" }
+      });
+      const states = await buildActivityStates(server, request.user!.id, templates, now);
+      const items = states
+        .filter((state) => !query.category || state.category === query.category)
+        .map((state) => serializeCatalogItem(state, now));
+
+      return ok({
+        selectedCategory: query.category ?? null,
+        categories: canonicalActivityCategories,
+        items
+      });
+    }
+  );
+
+  server.get(
+    "/v1/activities/history",
+    {
+      ...rateLimitFor(server, "activities"),
+      preHandler: [server.requireAuth],
+      schema: {
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            limit: { type: "integer", minimum: 1, maximum: 50, default: 10 }
+          }
+        }
+      }
+    },
+    async (request) => {
+      const query = request.query as { limit?: number };
+      const assignments = await server.prisma.activityAssignment.findMany({
+        where: {
+          userId: request.user!.id,
+          status: {
+            in: [
+              ActivityAssignmentStatus.completed,
+              ActivityAssignmentStatus.expired,
+              ActivityAssignmentStatus.skipped
+            ]
+          }
+        },
+        orderBy: { assignedAt: "desc" },
+        take: query.limit ?? 10,
+        include: { template: true }
+      });
+
+      return ok({
+        items: assignments.map(serializeAssignment)
+      });
+    }
+  );
+
   server.post(
     "/v1/activities/random",
     {
@@ -26,6 +111,15 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       preHandler: [server.requireAuth]
     },
     async (request, reply) => {
+      const body = (request.body ?? {}) as { category?: string };
+      if (body.category && !isCanonicalActivityCategory(body.category)) {
+        return reply
+          .code(400)
+          .send(fail("INVALID_ACTIVITY_CATEGORY", "Invalid activity category", request.trace));
+      }
+      const preferredCategory = isCanonicalActivityCategory(body.category)
+        ? body.category
+        : undefined;
       const now = new Date();
       const active = await server.prisma.activityAssignment.findFirst({
         where: {
@@ -37,7 +131,10 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       });
 
       if (active && (!active.expiresAt || active.expiresAt > now)) {
-        return ok(serializeAssignment(active));
+        return ok({
+          ...serializeAssignment(active),
+          recommendationReason: "ACTIVE_ASSIGNMENT"
+        });
       }
 
       if (active?.expiresAt && active.expiresAt <= now) {
@@ -52,8 +149,19 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         orderBy: { code: "asc" }
       });
 
-      const eligible = await filterEligibleTemplates(server, request.user!.id, templates, now);
-      if (eligible.length === 0) {
+      const states = await buildActivityStates(server, request.user!.id, templates, now);
+      const recommendation = recommendActivity(states.map((state) => ({
+        value: state.template,
+        category: state.category,
+        eligible: state.eligible,
+        completedCount: state.completedCount,
+        categoryCompletionCount: state.categoryCompletionCount,
+        lastUsedAt: state.lastUsedAt
+      })), {
+        preferredCategory,
+        now
+      });
+      if (!recommendation) {
         await recordAuditEventWithClient(server.prisma, {
           eventType: "activity.random.rejected",
           actorUserId: request.user!.id,
@@ -68,7 +176,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           .send(fail("NO_ELIGIBLE_ACTIVITY", "No eligible activity available", request.trace));
       }
 
-      const template = eligible[Math.floor(Math.random() * eligible.length)];
+      const template = recommendation.value;
       const assignment = await server.prisma.activityAssignment.create({
         data: {
           userId: request.user!.id,
@@ -88,12 +196,17 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         sourceId: assignment.id,
         metadata: {
           templateCode: template.code,
-          difficulty: template.difficulty
+          difficulty: template.difficulty,
+          preferredCategory: preferredCategory ?? null,
+          recommendationReason: recommendation.reason
         },
         trace: request.trace
       });
 
-      return ok(serializeAssignment(assignment));
+      return ok({
+        ...serializeAssignment(assignment),
+        recommendationReason: recommendation.reason
+      });
     }
   );
 
@@ -283,35 +396,93 @@ export async function registerActivityRoutes(server: FastifyInstance) {
   );
 }
 
-async function filterEligibleTemplates(
+type ActivityState = {
+  template: ActivityTemplate;
+  category: CanonicalActivityCategory;
+  eligible: boolean;
+  cooldownRemainingSeconds: number;
+  completedCount: number;
+  categoryCompletionCount: number;
+  lastUsedAt: Date | null;
+  lastCompletedAt: Date | null;
+};
+
+async function buildActivityStates(
   server: FastifyInstance,
   userId: string,
   templates: ActivityTemplate[],
   now: Date
-): Promise<ActivityTemplate[]> {
+): Promise<ActivityState[]> {
   const assignments = await server.prisma.activityAssignment.findMany({
     where: {
       userId,
       templateId: { in: templates.map((template) => template.id) }
-    }
+    },
+    orderBy: { assignedAt: "desc" }
   });
 
-  return templates.filter((template) => {
-    const latest = assignments
-      .filter((assignment) => assignment.templateId === template.id)
-      .sort((left, right) => {
-        const leftTime = (left.completedAt ?? left.assignedAt).getTime();
-        const rightTime = (right.completedAt ?? right.assignedAt).getTime();
-        return rightTime - leftTime;
-      })[0];
-
-    if (!latest) {
-      return true;
+  const completedByCategory = assignments.reduce<Record<string, number>>((counts, assignment) => {
+    if (assignment.status !== ActivityAssignmentStatus.completed) {
+      return counts;
     }
+    const template = templates.find((item) => item.id === assignment.templateId);
+    if (!template) {
+      return counts;
+    }
+    const category = normalizeActivityCategory(template.category);
+    counts[category] = (counts[category] ?? 0) + 1;
+    return counts;
+  }, {});
 
-    const latestTime = latest.completedAt ?? latest.assignedAt;
-    return now.getTime() - latestTime.getTime() >= template.cooldownSeconds * 1000;
+  return templates.map((template) => {
+    const templateAssignments = assignments.filter(
+      (assignment) => assignment.templateId === template.id
+    );
+    const latest = templateAssignments[0];
+    const latestTime = latest ? latest.completedAt ?? latest.assignedAt : null;
+    const cooldownRemainingMilliseconds = latestTime
+      ? Math.max(0, template.cooldownSeconds * 1000 - (now.getTime() - latestTime.getTime()))
+      : 0;
+    const category = normalizeActivityCategory(template.category);
+
+    return {
+      template,
+      category,
+      eligible: cooldownRemainingMilliseconds === 0,
+      cooldownRemainingSeconds: Math.ceil(cooldownRemainingMilliseconds / 1000),
+      completedCount: templateAssignments.filter(
+        (assignment) => assignment.status === ActivityAssignmentStatus.completed
+      ).length,
+      categoryCompletionCount: completedByCategory[category] ?? 0,
+      lastUsedAt: latestTime,
+      lastCompletedAt:
+        templateAssignments.find(
+          (assignment) =>
+            assignment.status === ActivityAssignmentStatus.completed && assignment.completedAt
+        )?.completedAt ?? null
+    };
   });
+}
+
+function serializeCatalogItem(state: ActivityState, now: Date) {
+  const reward = toRewardConfig(state.template.rewardConfig);
+  return {
+    templateId: state.template.id,
+    code: state.template.code,
+    title: state.template.title,
+    description: state.template.description,
+    category: state.category,
+    difficulty: state.template.difficulty,
+    rewardPreview: {
+      score: reward.score ?? 0,
+      drawProgress: reward.drawProgress ?? 0
+    },
+    eligible: state.eligible,
+    cooldownRemainingSeconds: state.cooldownRemainingSeconds,
+    completedCount: state.completedCount,
+    lastCompletedAt: state.lastCompletedAt?.toISOString() ?? null,
+    checkedAt: now.toISOString()
+  };
 }
 
 async function countTodayRewardedAssignments(
@@ -346,8 +517,10 @@ function serializeAssignment(assignment: {
   expiresAt: Date | null;
   rewarded: boolean;
   template: {
+    code: string;
     title: string;
     description: string;
+    category: ActivityCategory;
     difficulty: ActivityDifficulty;
     rewardConfig: Prisma.JsonValue;
   };
@@ -355,8 +528,10 @@ function serializeAssignment(assignment: {
   const reward = toRewardConfig(assignment.template.rewardConfig);
   return {
     assignmentId: assignment.id,
+    code: assignment.template.code,
     title: assignment.template.title,
     description: assignment.template.description,
+    category: normalizeActivityCategory(assignment.template.category),
     difficulty: assignment.template.difficulty,
     status: assignment.status,
     rewardPreview: {
