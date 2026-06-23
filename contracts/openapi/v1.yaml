@@ -448,7 +448,7 @@ components:
               type: [string, "null"]
     Achievement:
       type: object
-      required: [id, code, name, description, ruleType, rewardConfig, unlockedAt, rewardClaimedAt]
+      required: [id, code, name, description, ruleType, rewardConfig, progress, unlockedAt, rewardClaimedAt]
       properties:
         id:
           type: string
@@ -465,6 +465,25 @@ components:
         rewardConfig:
           type: object
           additionalProperties: true
+        progress:
+          type: object
+          required: [current, target, unit, percent, completed]
+          properties:
+            current:
+              type: integer
+              minimum: 0
+            target:
+              type: integer
+              minimum: 1
+            unit:
+              type: string
+              enum: [count, days, minutes, rank]
+            percent:
+              type: integer
+              minimum: 0
+              maximum: 100
+            completed:
+              type: boolean
         unlockedAt:
           type: [string, "null"]
           format: date-time

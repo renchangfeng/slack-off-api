@@ -9,6 +9,7 @@ import {
 } from "@prisma/client";
 import type { TraceContext } from "../observability/ids.js";
 import { incrementLeaderboardScores } from "../routes/leaderboards.js";
+import { calculateAchievementProgress } from "./progress.js";
 
 type AchievementClient = PrismaClient | Prisma.TransactionClient;
 
@@ -17,14 +18,6 @@ type RewardConfig = {
   drawProgress?: number;
   drawChance?: number;
   cosmeticCode?: string;
-};
-
-type RuleConfig = {
-  count?: number;
-  days?: number;
-  seconds?: number;
-  minutes?: number;
-  rank?: number;
 };
 
 export type AchievementUnlock = {
@@ -84,14 +77,14 @@ export async function evaluateAchievements(
     const newlyUnlocked = achievements.filter(
       (achievement) =>
         !unlockedIds.has(achievement.id) &&
-        isAchievementMet(achievement.ruleType, toRuleConfig(achievement.ruleConfig), {
+        calculateAchievementProgress(achievement.ruleType, achievement.ruleConfig, {
           totalSessions: stats?.totalSessions ?? 0,
           currentStreakDays: stats?.currentStreakDays ?? 0,
           eligibleDurationSeconds: stats?.eligibleDurationSeconds ?? 0,
           beanCount,
           completedActivityCount,
           weeklyRank
-        })
+        }).completed
     );
 
     const unlocks: AchievementUnlock[] = [];
@@ -143,46 +136,6 @@ export async function evaluateAchievements(
 
     return unlocks;
   });
-}
-
-function isAchievementMet(
-  ruleType: AchievementRuleType,
-  ruleConfig: RuleConfig,
-  progress: {
-    totalSessions: number;
-    currentStreakDays: number;
-    eligibleDurationSeconds: number;
-    beanCount: number;
-    completedActivityCount: number;
-    weeklyRank: number | null;
-  }
-): boolean {
-  if (ruleType === AchievementRuleType.first_checkin) {
-    return progress.totalSessions >= (ruleConfig.count ?? 1);
-  }
-
-  if (ruleType === AchievementRuleType.streak) {
-    return progress.currentStreakDays >= (ruleConfig.days ?? ruleConfig.count ?? 1);
-  }
-
-  if (ruleType === AchievementRuleType.total_duration) {
-    const requiredSeconds = ruleConfig.seconds ?? (ruleConfig.minutes ?? 0) * 60;
-    return requiredSeconds > 0 && progress.eligibleDurationSeconds >= requiredSeconds;
-  }
-
-  if (ruleType === AchievementRuleType.activity_count) {
-    return progress.completedActivityCount >= (ruleConfig.count ?? 1);
-  }
-
-  if (ruleType === AchievementRuleType.collection_count) {
-    return progress.beanCount >= (ruleConfig.count ?? 1);
-  }
-
-  if (ruleType === AchievementRuleType.weekly_top_rank) {
-    return progress.weeklyRank !== null && progress.weeklyRank <= (ruleConfig.rank ?? 10);
-  }
-
-  return false;
 }
 
 async function awardAchievementRewards(
@@ -303,7 +256,7 @@ function createRewardRow(
   };
 }
 
-async function getWeeklyRank(
+export async function getWeeklyRank(
   prisma: AchievementClient,
   userId: string,
   now: Date
@@ -339,10 +292,6 @@ function getWeeklyWindowStart(now: Date): Date {
   const day = start.getUTCDay() || 7;
   start.setUTCDate(start.getUTCDate() - day + 1);
   return start;
-}
-
-function toRuleConfig(value: Prisma.JsonValue): RuleConfig {
-  return isObject(value) ? value : {};
 }
 
 function toRewardConfig(value: Prisma.JsonValue): RewardConfig {

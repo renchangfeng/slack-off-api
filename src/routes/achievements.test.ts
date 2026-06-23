@@ -40,6 +40,30 @@ const runtimeConfig: RuntimeConfig = {
 };
 
 describe("achievement and cosmetic flows", () => {
+  it("returns quantitative achievement progress", async () => {
+    const store = createStore();
+    const server = await buildTestServer(store);
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/achievements",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.achievements[0]).toMatchObject({
+      code: "first_paid_pooping",
+      progress: {
+        current: 1,
+        target: 1,
+        unit: "count",
+        percent: 100,
+        completed: true
+      }
+    });
+
+    await server.close();
+  });
+
   it("unlocks achievements, awards cosmetic rewards, and stays idempotent", async () => {
     const store = createStore();
     const prisma = createPrismaMock(store);

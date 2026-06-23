@@ -1,5 +1,7 @@
-import { CosmeticType } from "@prisma/client";
+import { ActivityAssignmentStatus, CosmeticType } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
+import { getWeeklyRank } from "../achievements/evaluator.js";
+import { calculateAchievementProgress } from "../achievements/progress.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { fail, ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
@@ -12,27 +14,61 @@ export async function registerAchievementRoutes(server: FastifyInstance) {
       preHandler: [server.requireAuth]
     },
     async (request) => {
-      const achievements = await server.prisma.achievement.findMany({
-        where: { active: true },
-        orderBy: { code: "asc" },
-        include: {
-          users: {
-            where: { userId: request.user!.id }
-          }
-        }
-      });
+      const userId = request.user!.id;
+      const now = new Date();
+      const [achievements, stats, beanCount, completedActivityCount, weeklyRank] =
+        await Promise.all([
+          server.prisma.achievement.findMany({
+            where: { active: true },
+            orderBy: { code: "asc" },
+            include: {
+              users: {
+                where: { userId }
+              }
+            }
+          }),
+          server.prisma.userStats.findUnique({ where: { userId } }),
+          server.prisma.beanInventory.count({
+            where: { userId, quantity: { gt: 0 } }
+          }),
+          server.prisma.activityAssignment.count({
+            where: {
+              userId,
+              status: ActivityAssignmentStatus.completed,
+              rewarded: true
+            }
+          }),
+          getWeeklyRank(server.prisma, userId, now)
+        ]);
+
+      const progressInput = {
+        totalSessions: stats?.totalSessions ?? 0,
+        currentStreakDays: stats?.currentStreakDays ?? 0,
+        eligibleDurationSeconds: stats?.eligibleDurationSeconds ?? 0,
+        beanCount,
+        completedActivityCount,
+        weeklyRank
+      };
 
       return ok({
-        achievements: achievements.map((achievement) => ({
-          id: achievement.id,
-          code: achievement.code,
-          name: achievement.name,
-          description: achievement.description,
-          ruleType: achievement.ruleType,
-          rewardConfig: achievement.rewardConfig,
-          unlockedAt: achievement.users[0]?.unlockedAt.toISOString() ?? null,
-          rewardClaimedAt: achievement.users[0]?.rewardClaimedAt?.toISOString() ?? null
-        }))
+        achievements: achievements.map((achievement) => {
+          const progress = calculateAchievementProgress(
+            achievement.ruleType,
+            achievement.ruleConfig,
+            progressInput
+          );
+          return {
+            id: achievement.id,
+            code: achievement.code,
+            name: achievement.name,
+            description: achievement.description,
+            ruleType: achievement.ruleType,
+            rewardConfig: achievement.rewardConfig,
+            progress,
+            unlockedAt: achievement.users[0]?.unlockedAt.toISOString() ?? null,
+            rewardClaimedAt: achievement.users[0]?.rewardClaimedAt?.toISOString() ?? null
+          };
+        })
       });
     }
   );

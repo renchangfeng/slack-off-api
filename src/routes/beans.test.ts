@@ -144,6 +144,51 @@ describe("bean routes", () => {
 
     await server.close();
   });
+
+  it("exchanges ten fragments for one draw chance", async () => {
+    const server = await buildTestServer(store);
+    store.stats.set(userId, {
+      userId,
+      drawChances: 0,
+      drawProgress: 0,
+      beanFragments: 12,
+      beanPityCount: 0
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/beans/fragments/exchange",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toEqual({ fragments: 2, drawChances: 1 });
+
+    await server.close();
+  });
+
+  it("places an owned bean into the selected showcase slot", async () => {
+    const server = await buildTestServer(store);
+    store.inventory.set(`${userId}:${beanId}`, {
+      userId,
+      beanId,
+      quantity: 1,
+      firstObtainedAt: new Date(),
+      lastObtainedAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "PUT",
+      url: "/v1/beans/showcase/2",
+      headers: { authorization: "Bearer test" },
+      payload: { beanId }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(store.showcase.get(`${userId}:2`)).toMatchObject({ beanId, position: 2 });
+
+    await server.close();
+  });
 });
 
 async function buildTestServer(store: TestStore) {
@@ -170,6 +215,8 @@ type TestStats = {
   userId: string;
   drawChances: number;
   drawProgress: number;
+  beanFragments?: number;
+  beanPityCount?: number;
 };
 
 type TestInventory = {
@@ -187,6 +234,7 @@ function createStore() {
   const inventory = new Map<string, TestInventory>();
   const rewardLedger: Array<Record<string, unknown>> = [];
   const auditEvents: Array<Record<string, unknown>> = [];
+  const showcase = new Map<string, { userId: string; beanId: string; position: number }>();
   const bean = {
     id: beanId,
     code: "toilet_timer_bean",
@@ -206,6 +254,7 @@ function createStore() {
     inventory,
     rewardLedger,
     auditEvents,
+    showcase,
     bean
   };
 }
@@ -233,12 +282,38 @@ function createPrismaMock(store: TestStore) {
         current.drawChances -= data.drawChances?.decrement ?? 0;
         return current;
       },
-      updateMany: async () => ({ count: 0 })
+      updateMany: async ({ where }: { where: { userId: string; beanFragments: { gte: number } } }) => {
+        const current = store.stats.get(where.userId);
+        if (!current || (current.beanFragments ?? 0) < where.beanFragments.gte) {
+          return { count: 0 };
+        }
+        current.beanFragments = (current.beanFragments ?? 0) - 10;
+        current.drawChances += 1;
+        return { count: 1 };
+      }
     },
     beanShowcase: {
       findMany: async () => [],
-      deleteMany: async () => ({ count: 0 }),
-      upsert: async () => null
+      deleteMany: async ({ where }: { where: { userId: string; beanId: string } }) => {
+        for (const [key, item] of store.showcase) {
+          if (item.userId === where.userId && item.beanId === where.beanId) {
+            store.showcase.delete(key);
+          }
+        }
+        return { count: 1 };
+      },
+      upsert: async ({
+        create,
+        update
+      }: {
+        create: { userId: string; beanId: string; position: number };
+        update: { beanId: string };
+      }) => {
+        const key = `${create.userId}:${create.position}`;
+        const value = { ...create, beanId: update.beanId };
+        store.showcase.set(key, value);
+        return value;
+      }
     },
     beanDefinition: {
       findMany: async ({ include }: { include?: unknown }) => {
