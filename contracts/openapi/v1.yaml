@@ -165,6 +165,82 @@ components:
           anyOf:
             - $ref: "#/components/schemas/LeaderboardItem"
             - type: "null"
+    ProgressionGoal:
+      type: object
+      required: [code, title, description, completed]
+      properties:
+        code:
+          type: string
+          enum: [check_in, activity, bean_draw]
+        title:
+          type: string
+        description:
+          type: string
+        completed:
+          type: boolean
+    ProgressionSummary:
+      type: object
+      required:
+        - level
+        - experience
+        - currentLevelExperience
+        - nextLevelExperience
+        - progressPercent
+        - currentStreakDays
+        - longestStreakDays
+        - lifetime
+        - dailyGoals
+      properties:
+        level:
+          type: integer
+        experience:
+          type: integer
+        currentLevelExperience:
+          type: integer
+        nextLevelExperience:
+          type: integer
+        progressPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        currentStreakDays:
+          type: integer
+        longestStreakDays:
+          type: integer
+        lifetime:
+          type: object
+          required:
+            - totalSessions
+            - eligibleRestMinutes
+            - completedActivities
+            - collectedBeanTypes
+            - unlockedAchievements
+          properties:
+            totalSessions:
+              type: integer
+            eligibleRestMinutes:
+              type: integer
+            completedActivities:
+              type: integer
+            collectedBeanTypes:
+              type: integer
+            unlockedAchievements:
+              type: integer
+        dailyGoals:
+          type: object
+          required: [date, completed, total, goals]
+          properties:
+            date:
+              type: string
+              format: date
+            completed:
+              type: integer
+            total:
+              type: integer
+            goals:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProgressionGoal"
     Bean:
       type: object
       required: [id, code, name, rarity, description, quantity, owned]
@@ -531,6 +607,26 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/LeaderboardResponse"
+                  error:
+                    type: "null"
+  /v1/progression/summary:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      responses:
+        "200":
+          description: Authenticated user progression summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProgressionSummary"
                   error:
                     type: "null"
   /v1/beans/collection:
