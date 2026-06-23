@@ -3,6 +3,7 @@ import {
   ActivityCategory,
   ActivityDifficulty,
   BeanRarity,
+  BeanTheme,
   CosmeticType,
   PrismaClient
 } from "@prisma/client";
@@ -15,6 +16,7 @@ const beans = [
     code: "toilet_timer_bean",
     name: "马桶计时豆",
     rarity: BeanRarity.common,
+    theme: BeanTheme.restroom,
     description: "它不懂 KPI，但它懂你坐了多久。",
     weight: 60
   },
@@ -22,6 +24,7 @@ const beans = [
     code: "meeting_escape_bean",
     name: "会议脱壳豆",
     rarity: BeanRarity.uncommon,
+    theme: BeanTheme.office,
     description: "据说能让无效会议的灵魂先下班。",
     weight: 25
   },
@@ -29,6 +32,7 @@ const beans = [
     code: "boss_radar_bean",
     name: "老板雷达豆",
     rarity: BeanRarity.rare,
+    theme: BeanTheme.office,
     description: "没有真的雷达，但心虚时会变得很灵。",
     weight: 10
   },
@@ -36,6 +40,7 @@ const beans = [
     code: "paid_pooper_bean",
     name: "带薪王者豆",
     rarity: BeanRarity.epic,
+    theme: BeanTheme.restroom,
     description: "不是每一次久坐都有意义，但这颗有。",
     weight: 4
   },
@@ -43,8 +48,97 @@ const beans = [
     code: "slack_king_bean",
     name: "摸鱼大王豆",
     rarity: BeanRarity.legendary,
+    theme: BeanTheme.daydream,
     description: "传说级豆子，出现时请假装自己在思考架构。",
     weight: 1
+  },
+  {
+    code: "spreadsheet_fog_bean",
+    name: "表格迷雾豆",
+    rarity: BeanRarity.common,
+    theme: BeanTheme.office,
+    description: "打开表格后自动生成一种我很忙的气氛。",
+    weight: 55
+  },
+  {
+    code: "calendar_gap_bean",
+    name: "日历缝隙豆",
+    rarity: BeanRarity.uncommon,
+    theme: BeanTheme.office,
+    description: "专门住在两场会议之间那十五分钟里。",
+    weight: 28
+  },
+  {
+    code: "architecture_oracle_bean",
+    name: "架构神谕豆",
+    rarity: BeanRarity.epic,
+    theme: BeanTheme.office,
+    description: "盯着白板三分钟，偶尔会发出一句再抽象一层。",
+    weight: 5
+  },
+  {
+    code: "printer_peace_bean",
+    name: "打印机和平豆",
+    rarity: BeanRarity.common,
+    theme: BeanTheme.office,
+    description: "它不能修打印机，但能让你接受打印机。",
+    weight: 50
+  },
+  {
+    code: "flush_philosopher_bean",
+    name: "冲水哲学豆",
+    rarity: BeanRarity.common,
+    theme: BeanTheme.restroom,
+    description: "有些需求适合分析，有些适合听它远去。",
+    weight: 55
+  },
+  {
+    code: "soap_bubble_bean",
+    name: "洗手泡泡豆",
+    rarity: BeanRarity.uncommon,
+    theme: BeanTheme.restroom,
+    description: "认真洗手二十秒，也算完成一个清晰闭环。",
+    weight: 26
+  },
+  {
+    code: "stall_sage_bean",
+    name: "隔间贤者豆",
+    rarity: BeanRarity.rare,
+    theme: BeanTheme.restroom,
+    description: "在最安静的隔间里，短暂拥有答案。",
+    weight: 11
+  },
+  {
+    code: "cloud_meeting_bean",
+    name: "云端会议豆",
+    rarity: BeanRarity.common,
+    theme: BeanTheme.daydream,
+    description: "会议在云上举行，因此谁也找不到入口。",
+    weight: 52
+  },
+  {
+    code: "afternoon_portal_bean",
+    name: "午后传送门豆",
+    rarity: BeanRarity.uncommon,
+    theme: BeanTheme.daydream,
+    description: "据说能把三点二十传送到下班前五分钟。",
+    weight: 25
+  },
+  {
+    code: "weekend_preview_bean",
+    name: "周末预览豆",
+    rarity: BeanRarity.rare,
+    theme: BeanTheme.daydream,
+    description: "提前加载一点周末，但禁止用于取消真正的休息。",
+    weight: 10
+  },
+  {
+    code: "moonlight_overtime_bean",
+    name: "月光拒绝加班豆",
+    rarity: BeanRarity.epic,
+    theme: BeanTheme.daydream,
+    description: "月亮说今天到这里，系统表示收到。",
+    weight: 4
   }
 ];
 
@@ -450,6 +544,10 @@ async function main() {
       JSON.stringify(
         {
           beans: beans.length,
+          beanThemes: beans.reduce<Record<string, number>>((counts, bean) => {
+            counts[bean.theme] = (counts[bean.theme] ?? 0) + 1;
+            return counts;
+          }, {}),
           cosmetics: cosmetics.length,
           achievements: achievements.length,
           activities: activities.length,

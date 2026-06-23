@@ -1,4 +1,4 @@
-import { BeanRarity, RewardSourceType, RewardType } from "@prisma/client";
+import { BeanRarity, BeanTheme, RewardSourceType, RewardType } from "@prisma/client";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RuntimeConfig } from "../config/runtime.js";
@@ -56,6 +56,7 @@ describe("bean routes", () => {
       bean: {
         id: beanId,
         rarity: BeanRarity.common,
+        theme: BeanTheme.restroom,
         quantity: 1,
         owned: true
       }
@@ -191,6 +192,7 @@ function createStore() {
     code: "toilet_timer_bean",
     name: "马桶计时豆",
     rarity: BeanRarity.common,
+    theme: BeanTheme.restroom,
     description: "它不懂 KPI，但它懂你坐了多久。",
     imageKey: null,
     active: true,
@@ -218,15 +220,25 @@ function createPrismaMock(store: TestStore) {
         data
       }: {
         where: { userId: string };
-        data: { drawChances: { decrement: number } };
+        data: {
+          drawChances?: { decrement: number };
+          beanFragments?: { increment: number };
+          beanPityCount?: number;
+        };
       }) => {
         const current = store.stats.get(where.userId);
         if (!current) {
           throw new Error("Stats not found");
         }
-        current.drawChances -= data.drawChances.decrement;
+        current.drawChances -= data.drawChances?.decrement ?? 0;
         return current;
-      }
+      },
+      updateMany: async () => ({ count: 0 })
+    },
+    beanShowcase: {
+      findMany: async () => [],
+      deleteMany: async () => ({ count: 0 }),
+      upsert: async () => null
     },
     beanDefinition: {
       findMany: async ({ include }: { include?: unknown }) => {

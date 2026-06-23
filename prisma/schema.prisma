@@ -29,6 +29,12 @@ enum BeanRarity {
   legendary
 }
 
+enum BeanTheme {
+  office
+  restroom
+  daydream
+}
+
 enum RewardSourceType {
   check_in
   activity
@@ -107,6 +113,7 @@ model User {
   cosmetics           UserCosmetic[]
   activityAssignments ActivityAssignment[]
   progressionPeriods  ProgressionGoalPeriod[]
+  beanShowcase        BeanShowcase[]
   actorAuditEvents    AuditEvent[]         @relation("AuditActor")
   targetAuditEvents   AuditEvent[]         @relation("AuditTarget")
 
@@ -159,6 +166,8 @@ model UserStats {
   lastEligibleCheckinDate DateTime? @map("last_eligible_checkin_date") @db.Date
   drawChances             Int       @default(0) @map("draw_chances")
   drawProgress            Int       @default(0) @map("draw_progress")
+  beanFragments           Int       @default(0) @map("bean_fragments")
+  beanPityCount           Int       @default(0) @map("bean_pity_count")
   updatedAt               DateTime  @updatedAt @map("updated_at")
   user                    User      @relation(fields: [userId], references: [id])
 
@@ -185,6 +194,7 @@ model BeanDefinition {
   code        String          @unique
   name        String
   rarity      BeanRarity
+  theme       BeanTheme
   description String
   imageKey    String?         @map("image_key")
   active      Boolean         @default(true)
@@ -192,8 +202,22 @@ model BeanDefinition {
   createdAt   DateTime        @default(now()) @map("created_at")
   updatedAt   DateTime        @updatedAt @map("updated_at")
   inventory   BeanInventory[]
+  showcase    BeanShowcase[]
 
   @@map("bean_definitions")
+}
+
+model BeanShowcase {
+  userId    String         @map("user_id") @db.Uuid
+  beanId    String         @map("bean_id") @db.Uuid
+  position  Int
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  user      User           @relation(fields: [userId], references: [id])
+  bean      BeanDefinition @relation(fields: [beanId], references: [id])
+
+  @@id([userId, position])
+  @@unique([userId, beanId])
+  @@map("bean_showcase")
 }
 
 model BeanInventory {

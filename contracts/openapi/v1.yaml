@@ -320,7 +320,7 @@ components:
           $ref: "#/components/schemas/ProgressionGoalPeriod"
     Bean:
       type: object
-      required: [id, code, name, rarity, description, quantity, owned]
+      required: [id, code, name, rarity, theme, description, quantity, owned]
       properties:
         id:
           type: string
@@ -332,6 +332,9 @@ components:
         rarity:
           type: string
           enum: [common, uncommon, rare, epic, legendary]
+        theme:
+          type: string
+          enum: [office, restroom, daydream]
         description:
           type: string
         quantity:
@@ -340,24 +343,77 @@ components:
           type: boolean
     BeanCollection:
       type: object
-      required: [drawChances, drawProgress, beans]
+      required: [drawChances, drawProgress, fragments, fragmentExchangeCost, pityCount, pityThreshold, beans, themes, combinations, showcase]
       properties:
         drawChances:
           type: integer
         drawProgress:
           type: integer
+        fragments:
+          type: integer
+        fragmentExchangeCost:
+          type: integer
+        pityCount:
+          type: integer
+        pityThreshold:
+          type: integer
         beans:
           type: array
           items:
             $ref: "#/components/schemas/Bean"
+        themes:
+          type: array
+          items:
+            type: object
+            required: [theme, collected, total]
+            properties:
+              theme:
+                type: string
+                enum: [office, restroom, daydream]
+              collected:
+                type: integer
+              total:
+                type: integer
+        combinations:
+          type: array
+          items:
+            type: object
+            required: [code, name, owned, required, completed]
+            properties:
+              code:
+                type: string
+              name:
+                type: string
+              owned:
+                type: integer
+              required:
+                type: integer
+              completed:
+                type: boolean
+        showcase:
+          type: array
+          items:
+            type: object
+            required: [position, bean]
+            properties:
+              position:
+                type: integer
+              bean:
+                $ref: "#/components/schemas/Bean"
     BeanDrawResult:
       type: object
-      required: [bean, duplicate, remainingDrawChances]
+      required: [bean, duplicate, fragmentsGranted, pityTriggered, pityCount, remainingDrawChances]
       properties:
         bean:
           $ref: "#/components/schemas/Bean"
         duplicate:
           type: boolean
+        fragmentsGranted:
+          type: integer
+        pityTriggered:
+          type: boolean
+        pityCount:
+          type: integer
         remainingDrawChances:
           type: integer
         achievementsUnlocked:
@@ -651,6 +707,9 @@ paths:
                   type: string
                   minLength: 8
                   maxLength: 128
+                theme:
+                  type: string
+                  enum: [office, restroom, daydream]
       responses:
         "200":
           description: Started check-in
@@ -861,6 +920,59 @@ paths:
                     type: "null"
         "409":
           description: No draw chance available
+  /v1/beans/fragments/exchange:
+    post:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Fragment exchange result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    type: object
+                    required: [fragments, drawChances]
+                    properties:
+                      fragments:
+                        type: integer
+                      drawChances:
+                        type: integer
+                  error:
+                    type: "null"
+        "409":
+          description: Insufficient fragments
+  /v1/beans/showcase/{position}:
+    put:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: position
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 3
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [beanId]
+              properties:
+                beanId:
+                  type: string
+                  format: uuid
+      responses:
+        "200":
+          description: Showcase updated
+        "404":
+          description: Bean is not owned
   /v1/achievements:
     get:
       security:
