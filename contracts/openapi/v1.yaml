@@ -167,17 +167,104 @@ components:
             - type: "null"
     ProgressionGoal:
       type: object
-      required: [code, title, description, completed]
+      required: [code, title, description, current, target, unit, completed]
       properties:
         code:
           type: string
-          enum: [check_in, activity, bean_draw]
+          enum: [check_in, activity, bean_draw, rest_minutes, active_days]
         title:
           type: string
         description:
           type: string
+        current:
+          type: integer
+          minimum: 0
+        target:
+          type: integer
+          minimum: 1
+        unit:
+          type: string
+          enum: [times, minutes, days]
         completed:
           type: boolean
+    ProgressionGoalPeriod:
+      type: object
+      required: [period, periodStart, periodEnd, completed, total, allCompleted, rewardClaimed, claimedAt, reward, goals]
+      properties:
+        period:
+          type: string
+          enum: [daily, weekly]
+        periodStart:
+          type: string
+          format: date-time
+        periodEnd:
+          type: string
+          format: date-time
+        completed:
+          type: integer
+        total:
+          type: integer
+        allCompleted:
+          type: boolean
+        rewardClaimed:
+          type: boolean
+        claimedAt:
+          type: [string, "null"]
+          format: date-time
+        reward:
+          type: object
+          required: [score, drawProgress]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+        goals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProgressionGoal"
+    ProgressionClaimResult:
+      type: object
+      required: [period, awarded, claimedAt, reward, progression]
+      properties:
+        period:
+          type: string
+          enum: [daily, weekly]
+        awarded:
+          type: boolean
+        claimedAt:
+          type: string
+          format: date-time
+        reward:
+          type: object
+          required: [score, drawProgress, drawChancesGranted]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+            drawChancesGranted:
+              type: integer
+        progression:
+          type: object
+          required: [level, experience, currentLevelExperience, nextLevelExperience, progressPercent, previousLevel, currentLevel, leveledUp]
+          properties:
+            level:
+              type: integer
+            experience:
+              type: integer
+            currentLevelExperience:
+              type: integer
+            nextLevelExperience:
+              type: integer
+            progressPercent:
+              type: integer
+            previousLevel:
+              type: integer
+            currentLevel:
+              type: integer
+            leveledUp:
+              type: boolean
     ProgressionSummary:
       type: object
       required:
@@ -190,6 +277,7 @@ components:
         - longestStreakDays
         - lifetime
         - dailyGoals
+        - weeklyGoals
       properties:
         level:
           type: integer
@@ -227,20 +315,9 @@ components:
             unlockedAchievements:
               type: integer
         dailyGoals:
-          type: object
-          required: [date, completed, total, goals]
-          properties:
-            date:
-              type: string
-              format: date
-            completed:
-              type: integer
-            total:
-              type: integer
-            goals:
-              type: array
-              items:
-                $ref: "#/components/schemas/ProgressionGoal"
+          $ref: "#/components/schemas/ProgressionGoalPeriod"
+        weeklyGoals:
+          $ref: "#/components/schemas/ProgressionGoalPeriod"
     Bean:
       type: object
       required: [id, code, name, rarity, description, quantity, owned]
@@ -702,6 +779,34 @@ paths:
                     $ref: "#/components/schemas/ProgressionSummary"
                   error:
                     type: "null"
+  /v1/progression/{period}/claim:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+        - name: period
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [daily, weekly]
+      responses:
+        "200":
+          description: Goal period reward claim result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ProgressionClaimResult"
+                  error:
+                    type: "null"
+        "409":
+          description: Goal period is incomplete
   /v1/beans/collection:
     get:
       security:

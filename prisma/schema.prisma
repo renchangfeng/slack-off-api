@@ -34,7 +34,13 @@ enum RewardSourceType {
   activity
   achievement
   bean_draw
+  progression
   admin
+}
+
+enum ProgressionPeriodType {
+  daily
+  weekly
 }
 
 enum RewardType {
@@ -100,6 +106,7 @@ model User {
   achievements        UserAchievement[]
   cosmetics           UserCosmetic[]
   activityAssignments ActivityAssignment[]
+  progressionPeriods  ProgressionGoalPeriod[]
   actorAuditEvents    AuditEvent[]         @relation("AuditActor")
   targetAuditEvents   AuditEvent[]         @relation("AuditTarget")
 
@@ -302,6 +309,21 @@ model ActivityAssignment {
 
   @@index([userId, status])
   @@map("activity_assignments")
+}
+
+model ProgressionGoalPeriod {
+  id          String                @id @default(uuid()) @db.Uuid
+  userId      String                @map("user_id") @db.Uuid
+  periodType  ProgressionPeriodType @map("period_type")
+  periodStart DateTime              @map("period_start")
+  claimedAt   DateTime?             @map("claimed_at")
+  createdAt   DateTime              @default(now()) @map("created_at")
+  updatedAt   DateTime              @updatedAt @map("updated_at")
+  user        User                  @relation(fields: [userId], references: [id])
+
+  @@unique([userId, periodType, periodStart])
+  @@index([userId, periodType])
+  @@map("progression_goal_periods")
 }
 
 model AuditEvent {

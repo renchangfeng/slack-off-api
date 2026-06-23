@@ -28,3 +28,13 @@ export function utcDayRange(now: Date): { start: Date; end: Date } {
   end.setUTCDate(end.getUTCDate() + 1);
   return { start, end };
 }
+
+export function levelTransition(previousExperience: number, currentExperience: number) {
+  const previous = calculateProgressionLevel(previousExperience);
+  const current = calculateProgressionLevel(currentExperience);
+  return {
+    previousLevel: previous.level,
+    currentLevel: current.level,
+    leveledUp: current.level > previous.level
+  };
+}
