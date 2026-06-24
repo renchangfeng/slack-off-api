@@ -133,12 +133,12 @@ components:
             type: string
     LeaderboardItem:
       type: object
-      required: [rank, userId, displayName, score]
+      required: [rank, userId, displayName, score, reactions]
       properties:
         rank:
           type: integer
         userId:
-          type: string
+          type: [string, "null"]
         displayName:
           type: string
         equippedBadge:
@@ -147,9 +147,17 @@ components:
           type: [string, "null"]
         score:
           type: integer
+        reactions:
+          type: object
+          required: [tissue, like]
+          properties:
+            tissue:
+              type: integer
+            like:
+              type: integer
     LeaderboardResponse:
       type: object
-      required: [window, windowStart, items, currentUser]
+      required: [window, windowStart, scope, suppressed, suppressionReason, items, currentUser]
       properties:
         window:
           type: string
@@ -157,6 +165,13 @@ components:
         windowStart:
           type: string
           format: date-time
+        scope:
+          type: string
+          enum: [global, friends, squad, company]
+        suppressed:
+          type: boolean
+        suppressionReason:
+          type: [string, "null"]
         items:
           type: array
           items:
@@ -165,6 +180,43 @@ components:
           anyOf:
             - $ref: "#/components/schemas/LeaderboardItem"
             - type: "null"
+    SocialSummary:
+      type: object
+      required: [friendCode, friends, squad, company, reactions]
+      properties:
+        friendCode:
+          type: string
+        friends:
+          type: array
+          items:
+            type: object
+            required: [userId, displayName]
+            properties:
+              userId:
+                type: string
+              displayName:
+                type: string
+        squad:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            inviteCode: { type: string }
+            memberCount: { type: integer }
+        company:
+          type: [object, "null"]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            inviteCode: { type: string }
+            anonymousAlias: { type: string }
+            memberCount: { type: integer }
+        reactions:
+          type: object
+          required: [dailyLimit, resetTimezone]
+          properties:
+            dailyLimit: { type: integer }
+            resetTimezone: { type: string }
     ProgressionGoal:
       type: object
       required: [code, title, description, current, target, unit, completed]
@@ -824,6 +876,13 @@ paths:
             type: integer
             default: 50
             maximum: 100
+        - name: scope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [global, friends, squad, company]
+            default: global
       responses:
         "200":
           description: Leaderboard page and current user rank context
@@ -837,6 +896,67 @@ paths:
                     $ref: "#/components/schemas/LeaderboardResponse"
                   error:
                     type: "null"
+  /v1/social/summary:
+    get:
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Friend code, relationships, and group memberships
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SocialSummary"
+                  error:
+                    type: "null"
+  /v1/social/friends:
+    post:
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [friendCode]
+              properties:
+                friendCode: { type: string }
+      responses:
+        "200":
+          description: Updated social summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SocialSummary"
+                  error: { type: "null" }
+  /v1/social/reactions:
+    post:
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipientUserId, reactionType]
+              properties:
+                recipientUserId: { type: string, format: uuid }
+                reactionType:
+                  type: string
+                  enum: [tissue, like]
+      responses:
+        "200":
+          description: Reaction result and aggregate counts
   /v1/progression/summary:
     get:
       security:

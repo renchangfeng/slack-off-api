@@ -94,11 +94,17 @@ enum ActivityAssignmentStatus {
   expired
 }
 
+enum SocialReactionType {
+  tissue
+  like
+}
+
 model User {
   id                  String               @id @default(uuid()) @db.Uuid
   authSubject         String               @unique @map("auth_subject")
   email               String?              @unique
   displayName         String               @map("display_name")
+  friendCode          String?              @unique @map("friend_code")
   avatarUrl           String?              @map("avatar_url")
   createdAt           DateTime             @default(now()) @map("created_at")
   updatedAt           DateTime             @updatedAt @map("updated_at")
@@ -116,8 +122,94 @@ model User {
   beanShowcase        BeanShowcase[]
   actorAuditEvents    AuditEvent[]         @relation("AuditActor")
   targetAuditEvents   AuditEvent[]         @relation("AuditTarget")
+  friendshipsAsA      Friendship[]         @relation("FriendshipUserA")
+  friendshipsAsB      Friendship[]         @relation("FriendshipUserB")
+  ownedSquads          Squad[]              @relation("SquadOwner")
+  squadMembership     SquadMembership?
+  ownedCompanies      Company[]            @relation("CompanyOwner")
+  companyMembership   CompanyMembership?
+  sentReactions       SocialReaction[]      @relation("ReactionSender")
+  receivedReactions   SocialReaction[]      @relation("ReactionRecipient")
 
   @@map("users")
+}
+
+model Friendship {
+  id        String   @id @default(uuid()) @db.Uuid
+  userAId   String   @map("user_a_id") @db.Uuid
+  userBId   String   @map("user_b_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  userA     User     @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+  @@map("friendships")
+}
+
+model Squad {
+  id          String            @id @default(uuid()) @db.Uuid
+  name        String
+  inviteCode  String            @unique @map("invite_code")
+  ownerId     String            @map("owner_id") @db.Uuid
+  createdAt   DateTime          @default(now()) @map("created_at")
+  owner       User              @relation("SquadOwner", fields: [ownerId], references: [id])
+  memberships SquadMembership[]
+
+  @@map("squads")
+}
+
+model SquadMembership {
+  userId   String   @id @map("user_id") @db.Uuid
+  squadId  String   @map("squad_id") @db.Uuid
+  joinedAt DateTime @default(now()) @map("joined_at")
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  squad    Squad    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+
+  @@index([squadId])
+  @@map("squad_memberships")
+}
+
+model Company {
+  id          String              @id @default(uuid()) @db.Uuid
+  name        String
+  inviteCode  String              @unique @map("invite_code")
+  ownerId     String              @map("owner_id") @db.Uuid
+  createdAt   DateTime            @default(now()) @map("created_at")
+  owner       User                @relation("CompanyOwner", fields: [ownerId], references: [id])
+  memberships CompanyMembership[]
+
+  @@map("companies")
+}
+
+model CompanyMembership {
+  userId         String   @id @map("user_id") @db.Uuid
+  companyId      String   @map("company_id") @db.Uuid
+  anonymousAlias String   @map("anonymous_alias")
+  joinedAt       DateTime @default(now()) @map("joined_at")
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company        Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, anonymousAlias])
+  @@index([companyId])
+  @@map("company_memberships")
+}
+
+model SocialReaction {
+  id           String             @id @default(uuid()) @db.Uuid
+  senderId     String             @map("sender_id") @db.Uuid
+  recipientId  String             @map("recipient_id") @db.Uuid
+  reactionType SocialReactionType @map("reaction_type")
+  reactionDate DateTime           @map("reaction_date") @db.Date
+  createdAt    DateTime           @default(now()) @map("created_at")
+  sender       User               @relation("ReactionSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient    User               @relation("ReactionRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, recipientId, reactionType, reactionDate])
+  @@index([senderId, reactionDate])
+  @@index([recipientId, reactionDate])
+  @@map("social_reactions")
 }
 
 model UserProfile {

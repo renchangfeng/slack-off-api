@@ -513,6 +513,9 @@ function createPrismaMock(store: TestStore) {
             score.score > where.score.gt
         ).length
     },
+    socialReaction: {
+      groupBy: async () => []
+    },
     auditEvent: {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         store.auditEvents.push(data);
