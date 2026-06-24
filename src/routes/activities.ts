@@ -11,6 +11,13 @@ import type { FastifyInstance } from "fastify";
 import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import {
+  buildActivityInteraction,
+  pickCompletionFeedback,
+  summarizeActivityInteraction,
+  validateActivityInteractionProgress,
+  type ActivityInteractionProgress
+} from "../activities/interaction.js";
+import {
   canonicalActivityCategories,
   isCanonicalActivityCategory,
   normalizeActivityCategory,
@@ -227,6 +234,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
     },
     async (request, reply) => {
       const params = request.params as { assignmentId: string };
+      const body = (request.body ?? {}) as { interaction?: ActivityInteractionProgress };
       const now = new Date();
       const assignment = await server.prisma.activityAssignment.findUnique({
         where: { id: params.assignmentId },
@@ -271,6 +279,27 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         return reply
           .code(409)
           .send(fail("ACTIVITY_EXPIRED", "Activity assignment expired", request.trace));
+      }
+
+      const interaction = buildActivityInteraction(assignment.template);
+      const interactionValidation = validateActivityInteractionProgress(interaction, body.interaction);
+      if (!interactionValidation.ok) {
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "activity.complete.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: {
+            reason: "INTERACTION_INCOMPLETE",
+            missingStepIds: interactionValidation.missingStepIds
+          },
+          trace: request.trace
+        });
+
+        return reply
+          .code(409)
+          .send(fail("INTERACTION_INCOMPLETE", "Complete all activity steps first", request.trace));
       }
 
       const dailyCompleted = await countTodayRewardedAssignments(
@@ -390,8 +419,60 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         reward: {
           ...reward,
           achievementsUnlocked
-        }
+        },
+        feedback: pickCompletionFeedback(interaction, assignment.id)
       });
+    }
+  );
+
+  server.post(
+    "/v1/activities/:assignmentId/skip",
+    {
+      ...rateLimitFor(server, "activities"),
+      preHandler: [server.requireAuth],
+      schema: {
+        params: {
+          type: "object",
+          required: ["assignmentId"],
+          properties: {
+            assignmentId: { type: "string", format: "uuid" }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const params = request.params as { assignmentId: string };
+      const assignment = await server.prisma.activityAssignment.findUnique({
+        where: { id: params.assignmentId },
+        include: { template: true }
+      });
+
+      if (!assignment || assignment.userId !== request.user?.id) {
+        return reply
+          .code(404)
+          .send(fail("ACTIVITY_NOT_FOUND", "Activity assignment not found", request.trace));
+      }
+
+      if (assignment.status !== ActivityAssignmentStatus.active) {
+        return ok(serializeAssignment(assignment));
+      }
+
+      const skipped = await server.prisma.activityAssignment.update({
+        where: { id: assignment.id },
+        data: { status: ActivityAssignmentStatus.skipped }
+      });
+
+      await recordAuditEventWithClient(server.prisma, {
+        eventType: "activity.skipped",
+        actorUserId: request.user!.id,
+        targetUserId: request.user!.id,
+        sourceType: "activity_assignment",
+        sourceId: assignment.id,
+        metadata: { templateCode: assignment.template.code },
+        trace: request.trace
+      });
+
+      return ok(serializeAssignment({ ...assignment, ...skipped }));
     }
   );
 }
@@ -466,6 +547,7 @@ async function buildActivityStates(
 
 function serializeCatalogItem(state: ActivityState, now: Date) {
   const reward = toRewardConfig(state.template.rewardConfig);
+  const interaction = buildActivityInteraction(state.template);
   return {
     templateId: state.template.id,
     code: state.template.code,
@@ -477,6 +559,7 @@ function serializeCatalogItem(state: ActivityState, now: Date) {
       score: reward.score ?? 0,
       drawProgress: reward.drawProgress ?? 0
     },
+    interactionSummary: summarizeActivityInteraction(interaction),
     eligible: state.eligible,
     cooldownRemainingSeconds: state.cooldownRemainingSeconds,
     completedCount: state.completedCount,
@@ -526,6 +609,7 @@ function serializeAssignment(assignment: {
   };
 }) {
   const reward = toRewardConfig(assignment.template.rewardConfig);
+  const interaction = buildActivityInteraction(assignment.template);
   return {
     assignmentId: assignment.id,
     code: assignment.template.code,
@@ -538,6 +622,8 @@ function serializeAssignment(assignment: {
       score: reward.score ?? 0,
       drawProgress: reward.drawProgress ?? 0
     },
+    interaction,
+    interactionSummary: summarizeActivityInteraction(interaction),
     assignedAt: assignment.assignedAt.toISOString(),
     completedAt: assignment.completedAt?.toISOString() ?? null,
     expiresAt: assignment.expiresAt?.toISOString() ?? null,

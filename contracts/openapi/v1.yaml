@@ -330,6 +330,7 @@ components:
         - lifetime
         - dailyGoals
         - weeklyGoals
+        - nextActions
       properties:
         level:
           type: integer
@@ -370,6 +371,52 @@ components:
           $ref: "#/components/schemas/ProgressionGoalPeriod"
         weeklyGoals:
           $ref: "#/components/schemas/ProgressionGoalPeriod"
+        nextActions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProgressionNextAction"
+    ProgressionNextAction:
+      type: object
+      required:
+        - code
+        - title
+        - description
+        - actionLabel
+        - targetSection
+        - priority
+        - rewardPreview
+      properties:
+        code:
+          type: string
+          enum:
+            - start_check_in
+            - complete_activity
+            - draw_bean
+            - claim_daily_reward
+            - claim_weekly_reward
+        title:
+          type: string
+        description:
+          type: string
+        actionLabel:
+          type: string
+        targetSection:
+          type: string
+          enum: [home, activities, beans, rankings, profile]
+        priority:
+          type: integer
+        rewardPreview:
+          anyOf:
+            - type: object
+              required: [score, drawProgress, drawChances]
+              properties:
+                score:
+                  type: integer
+                drawProgress:
+                  type: integer
+                drawChances:
+                  type: integer
+            - type: "null"
     Bean:
       type: object
       required: [id, code, name, rarity, theme, description, quantity, owned]
@@ -602,9 +649,106 @@ components:
       properties:
         cosmetic:
           $ref: "#/components/schemas/Cosmetic"
+    ActivityInteractionStep:
+      type: object
+      required: [id, type, title, description, required]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [ack, timer, choice, mini_game]
+        title:
+          type: string
+        description:
+          type: string
+        required:
+          type: boolean
+        durationSeconds:
+          type: integer
+        options:
+          type: array
+          items:
+            type: object
+            required: [id, label, resultText]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              resultText:
+                type: string
+        correctOptionId:
+          type: string
+        gameCode:
+          type: string
+        requiredResult:
+          type: string
+    ActivityInteraction:
+      type: object
+      required: [mode, estimatedSeconds, proofPolicy, steps, completionFeedback]
+      properties:
+        mode:
+          type: string
+          enum: [guided]
+        estimatedSeconds:
+          type: integer
+        proofPolicy:
+          type: string
+          enum: [none, optional_photo, optional_location, external_game]
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityInteractionStep"
+        completionFeedback:
+          type: array
+          items:
+            type: string
+    ActivityInteractionSummary:
+      type: object
+      required: [stepCount, estimatedSeconds, hasTimer, hasChoice, hasMiniGame, proofPolicy]
+      properties:
+        stepCount:
+          type: integer
+        estimatedSeconds:
+          type: integer
+        hasTimer:
+          type: boolean
+        hasChoice:
+          type: boolean
+        hasMiniGame:
+          type: boolean
+        proofPolicy:
+          type: string
+          enum: [none, optional_photo, optional_location, external_game]
+    ActivityInteractionProgress:
+      type: object
+      additionalProperties: false
+      properties:
+        completedStepIds:
+          type: array
+          items:
+            type: string
+        timerSeconds:
+          type: object
+          additionalProperties:
+            type: integer
+        choiceAnswers:
+          type: object
+          additionalProperties:
+            type: string
+        miniGameResults:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              passed:
+                type: boolean
+              score:
+                type: integer
     ActivityAssignment:
       type: object
-      required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, assignedAt, completedAt, expiresAt, rewarded]
+      required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, interaction, interactionSummary, assignedAt, completedAt, expiresAt, rewarded]
       properties:
         assignmentId:
           type: string
@@ -632,6 +776,10 @@ components:
               type: integer
             drawProgress:
               type: integer
+        interaction:
+          $ref: "#/components/schemas/ActivityInteraction"
+        interactionSummary:
+          $ref: "#/components/schemas/ActivityInteractionSummary"
         assignedAt:
           type: string
           format: date-time
@@ -648,7 +796,7 @@ components:
           enum: [PREFERRED_CATEGORY, TRY_SOMETHING_NEW, MATCHES_HISTORY, AVAILABLE_NOW, ACTIVE_ASSIGNMENT]
     ActivityCatalogItem:
       type: object
-      required: [templateId, code, title, description, category, difficulty, rewardPreview, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
+      required: [templateId, code, title, description, category, difficulty, rewardPreview, interactionSummary, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
       properties:
         templateId:
           type: string
@@ -673,6 +821,8 @@ components:
               type: integer
             drawProgress:
               type: integer
+        interactionSummary:
+          $ref: "#/components/schemas/ActivityInteractionSummary"
         eligible:
           type: boolean
         cooldownRemainingSeconds:
@@ -713,10 +863,12 @@ components:
             $ref: "#/components/schemas/ActivityAssignment"
     ActivityCompleteResult:
       type: object
-      required: [assignment, reward]
+      required: [assignment, reward, feedback]
       properties:
         assignment:
           $ref: "#/components/schemas/ActivityAssignment"
+        feedback:
+          type: string
         reward:
           type: object
           required: [score, drawProgress, drawChancesGranted, rewarded, reason, achievementsUnlocked]
@@ -817,10 +969,8 @@ paths:
               type: object
               additionalProperties: false
               properties:
-                idempotencyKey:
-                  type: string
-                  minLength: 8
-                  maxLength: 128
+                interaction:
+                  $ref: "#/components/schemas/ActivityInteractionProgress"
       responses:
         "200":
           description: Finished check-in with rewards
@@ -1288,4 +1438,30 @@ paths:
         "404":
           description: Activity assignment not found
         "409":
-          description: Activity expired
+          description: Activity expired or interaction incomplete
+  /v1/activities/{assignmentId}/skip:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: assignmentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Skipped activity assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityAssignment"
+                  error:
+                    type: "null"
+        "404":
+          description: Activity assignment not found

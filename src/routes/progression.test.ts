@@ -9,7 +9,8 @@ import { describe, expect, it } from "vitest";
 import type { RuntimeConfig } from "../config/runtime.js";
 import { registerConfig } from "../plugins/config.js";
 import { registerObservability } from "../plugins/observability.js";
-import { registerProgressionRoutes } from "./progression.js";
+import type { ProgressionGoal, ProgressionGoalCode } from "../progression/goals.js";
+import { buildProgressionNextActions, registerProgressionRoutes } from "./progression.js";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const periodId = "22222222-2222-4222-8222-222222222222";
@@ -70,6 +71,17 @@ describe("progression routes", () => {
           expect.objectContaining({ code: "activity", current: 5, target: 5 }),
           expect.objectContaining({ code: "active_days", current: 3, target: 3 })
         ]
+      },
+      nextActions: {
+        0: expect.objectContaining({
+          code: "claim_weekly_reward",
+          targetSection: "home",
+          rewardPreview: expect.objectContaining({ score: 50, drawProgress: 2 })
+        }),
+        1: expect.objectContaining({
+          code: "complete_activity",
+          targetSection: "activities"
+        })
       }
     });
 
@@ -139,7 +151,103 @@ describe("progression routes", () => {
 
     await server.close();
   });
+
+  it("orders claimable daily rewards before follow-up gameplay actions", () => {
+    const daily = periodState({
+      completed: 3,
+      total: 3,
+      allCompleted: true,
+      rewardClaimed: false,
+      reward: { score: 15, drawProgress: 1 },
+      goals: [
+        goal("check_in", 1, 1),
+        goal("activity", 1, 1),
+        goal("bean_draw", 1, 1)
+      ]
+    });
+    const weekly = periodState({
+      completed: 1,
+      total: 3,
+      allCompleted: false,
+      rewardClaimed: false,
+      reward: { score: 50, drawProgress: 2 },
+      goals: [
+        goal("rest_minutes", 10, 60),
+        goal("activity", 1, 5),
+        goal("active_days", 1, 3)
+      ]
+    });
+
+    const actions = buildProgressionNextActions(daily, weekly);
+
+    expect(actions[0]).toMatchObject({
+      code: "claim_daily_reward",
+      actionLabel: "领取今日奖励",
+      rewardPreview: { score: 15, drawProgress: 1, drawChances: 0 }
+    });
+  });
+
+  it("guides unfinished daily goals in loop order", () => {
+    const daily = periodState({
+      completed: 1,
+      total: 3,
+      allCompleted: false,
+      rewardClaimed: false,
+      reward: { score: 15, drawProgress: 1 },
+      goals: [
+        goal("check_in", 1, 1),
+        goal("activity", 0, 1),
+        goal("bean_draw", 0, 1)
+      ]
+    });
+    const weekly = periodState({
+      completed: 0,
+      total: 3,
+      allCompleted: false,
+      rewardClaimed: false,
+      reward: { score: 50, drawProgress: 2 },
+      goals: [
+        goal("rest_minutes", 0, 60),
+        goal("activity", 0, 5),
+        goal("active_days", 0, 3)
+      ]
+    });
+
+    expect(buildProgressionNextActions(daily, weekly).map((action) => action.code)).toEqual([
+      "complete_activity",
+      "draw_bean"
+    ]);
+  });
 });
+
+function goal(code: ProgressionGoalCode, current: number, target: number): ProgressionGoal {
+  return {
+    code,
+    title: code,
+    description: code,
+    current,
+    target,
+    unit: code === "rest_minutes" ? "minutes" : code === "active_days" ? "days" : "times",
+    completed: current >= target
+  };
+}
+
+function periodState(input: {
+  completed: number;
+  total: number;
+  allCompleted: boolean;
+  rewardClaimed: boolean;
+  reward: { score: number; drawProgress: number };
+  goals: ReturnType<typeof goal>[];
+}) {
+  return {
+    period: ProgressionPeriodType.daily,
+    periodStart: new Date("2026-06-24T00:00:00.000Z"),
+    periodEnd: new Date("2026-06-25T00:00:00.000Z"),
+    claimedAt: null,
+    ...input
+  };
+}
 
 async function buildTestServer(store: TestStore) {
   const server = Fastify({ logger: false });

@@ -20,6 +20,27 @@ import {
 import { rateLimitFor } from "../rate-limit/policies.js";
 import { incrementLeaderboardScores } from "./leaderboards.js";
 
+type ProgressionNextActionCode =
+  | "start_check_in"
+  | "complete_activity"
+  | "draw_bean"
+  | "claim_daily_reward"
+  | "claim_weekly_reward";
+
+type ProgressionNextAction = {
+  code: ProgressionNextActionCode;
+  title: string;
+  description: string;
+  actionLabel: string;
+  targetSection: "home" | "activities" | "beans" | "rankings" | "profile";
+  priority: number;
+  rewardPreview: {
+    score: number;
+    drawProgress: number;
+    drawChances: number;
+  } | null;
+};
+
 export async function registerProgressionRoutes(server: FastifyInstance) {
   server.get(
     "/v1/progression/summary",
@@ -297,6 +318,21 @@ async function buildProgressionSummary(server: FastifyInstance, userId: string, 
     activeDays
   });
 
+  const dailyPeriodState = serializeGoalPeriod(
+    ProgressionPeriodType.daily,
+    day.start,
+    day.end,
+    dailyGoals,
+    dailyPeriod?.claimedAt ?? null
+  );
+  const weeklyPeriodState = serializeGoalPeriod(
+    ProgressionPeriodType.weekly,
+    week.start,
+    week.end,
+    weeklyGoals,
+    weeklyPeriod?.claimedAt ?? null
+  );
+
   return {
     ...calculateProgressionLevel(allTimeScore?.score ?? 0),
     currentStreakDays: stats?.currentStreakDays ?? 0,
@@ -308,20 +344,9 @@ async function buildProgressionSummary(server: FastifyInstance, userId: string, 
       collectedBeanTypes,
       unlockedAchievements
     },
-    dailyGoals: serializeGoalPeriod(
-      ProgressionPeriodType.daily,
-      day.start,
-      day.end,
-      dailyGoals,
-      dailyPeriod?.claimedAt ?? null
-    ),
-    weeklyGoals: serializeGoalPeriod(
-      ProgressionPeriodType.weekly,
-      week.start,
-      week.end,
-      weeklyGoals,
-      weeklyPeriod?.claimedAt ?? null
-    )
+    dailyGoals: dailyPeriodState,
+    weeklyGoals: weeklyPeriodState,
+    nextActions: buildProgressionNextActions(dailyPeriodState, weeklyPeriodState)
   };
 }
 
@@ -350,6 +375,88 @@ function serializeGoalPeriod(
 
 function inRange(value: Date | null, range: { start: Date; end: Date }) {
   return Boolean(value && value >= range.start && value < range.end);
+}
+
+export function buildProgressionNextActions(
+  dailyGoals: ReturnType<typeof serializeGoalPeriod>,
+  weeklyGoals: ReturnType<typeof serializeGoalPeriod>
+): ProgressionNextAction[] {
+  const actions: ProgressionNextAction[] = [];
+  const dailyReward = dailyGoals.reward;
+  const weeklyReward = weeklyGoals.reward;
+
+  if (dailyGoals.allCompleted && !dailyGoals.rewardClaimed) {
+    actions.push({
+      code: "claim_daily_reward",
+      title: "今日整组奖励可以领取",
+      description: "今天的休息、任务和抽豆闭环已经跑通，先把奖励收下。",
+      actionLabel: "领取今日奖励",
+      targetSection: "home",
+      priority: 10,
+      rewardPreview: {
+        score: dailyReward.score,
+        drawProgress: dailyReward.drawProgress,
+        drawChances: 0
+      }
+    });
+  }
+
+  if (weeklyGoals.allCompleted && !weeklyGoals.rewardClaimed) {
+    actions.push({
+      code: "claim_weekly_reward",
+      title: "本周整组奖励可以领取",
+      description: "这一周有在认真休息，给自己盖个章。",
+      actionLabel: "领取本周奖励",
+      targetSection: "home",
+      priority: 15,
+      rewardPreview: {
+        score: weeklyReward.score,
+        drawProgress: weeklyReward.drawProgress,
+        drawChances: 0
+      }
+    });
+  }
+
+  const checkInGoal = dailyGoals.goals.find((goal) => goal.code === "check_in");
+  if (checkInGoal && !checkInGoal.completed) {
+    actions.push({
+      code: "start_check_in",
+      title: "先完成一次有效打卡",
+      description: "今日闭环从一次至少 1 分钟的带薪休息开始。",
+      actionLabel: "开始打卡",
+      targetSection: "home",
+      priority: 20,
+      rewardPreview: { score: 1, drawProgress: 1, drawChances: 0 }
+    });
+  }
+
+  const activityGoal = dailyGoals.goals.find((goal) => goal.code === "activity");
+  if (activityGoal && !activityGoal.completed) {
+    actions.push({
+      code: "complete_activity",
+      title: "补一个摸鱼任务",
+      description: "做完一个随机活动，今日目标会继续往前推进。",
+      actionLabel: "去领任务",
+      targetSection: "activities",
+      priority: checkInGoal?.completed ? 25 : 35,
+      rewardPreview: { score: 5, drawProgress: 1, drawChances: 0 }
+    });
+  }
+
+  const beanGoal = dailyGoals.goals.find((goal) => goal.code === "bean_draw");
+  if (beanGoal && !beanGoal.completed) {
+    actions.push({
+      code: "draw_bean",
+      title: "抽一颗今日命运豆",
+      description: "把抽豆机会用掉，图鉴和每日目标都会更完整。",
+      actionLabel: "去豆仓",
+      targetSection: "beans",
+      priority: activityGoal?.completed ? 30 : 45,
+      rewardPreview: { score: 0, drawProgress: 0, drawChances: 0 }
+    });
+  }
+
+  return actions.sort((left, right) => left.priority - right.priority);
 }
 
 function nextDrawState(currentProgress: number, granted: number, progressPerChance: number) {

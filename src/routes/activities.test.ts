@@ -64,7 +64,18 @@ describe("activity routes", () => {
       rewardPreview: {
         score: 8,
         drawProgress: 1
-      }
+      },
+      interaction: expect.objectContaining({
+        mode: "guided",
+        steps: expect.arrayContaining([
+          expect.objectContaining({ id: "notice", type: "ack" }),
+          expect.objectContaining({ id: "mini_game", type: "mini_game" })
+        ])
+      }),
+      interactionSummary: expect.objectContaining({
+        stepCount: 2,
+        hasMiniGame: true
+      })
     });
     expect(store.assignments).toHaveLength(1);
     expect(store.auditEvents).toEqual(
@@ -103,7 +114,8 @@ describe("activity routes", () => {
           code: "match_three_rounds",
           category: "game",
           eligible: false,
-          completedCount: 1
+          completedCount: 1,
+          interactionSummary: expect.objectContaining({ hasMiniGame: true })
         }
       ]
     });
@@ -181,7 +193,7 @@ describe("activity routes", () => {
       method: "POST",
       url: `/v1/activities/${assignment.id}/complete`,
       headers: { authorization: "Bearer test" },
-      payload: { idempotencyKey: "activity_done" }
+      payload: gameInteractionProgress()
     });
 
     expect(response.statusCode).toBe(200);
@@ -192,6 +204,7 @@ describe("activity routes", () => {
       rewarded: true,
       reason: null
     });
+    expect(response.json().data.feedback).toEqual(expect.any(String));
     expect(store.assignments[0]).toMatchObject({
       status: ActivityAssignmentStatus.completed,
       rewarded: true
@@ -221,6 +234,28 @@ describe("activity routes", () => {
     await server.close();
   });
 
+  it("rejects completion until the interaction flow is satisfied", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: { interaction: { completedStepIds: ["notice"] } }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("INTERACTION_INCOMPLETE");
+    expect(store.rewardLedger).toHaveLength(0);
+    expect(store.assignments[0]).toMatchObject({
+      status: ActivityAssignmentStatus.active,
+      rewarded: false
+    });
+
+    await server.close();
+  });
+
   it("completes without rewards after the daily template limit", async () => {
     const server = await buildTestServer(store);
     store.addAssignment({
@@ -234,7 +269,8 @@ describe("activity routes", () => {
     const response = await server.inject({
       method: "POST",
       url: `/v1/activities/${assignment.id}/complete`,
-      headers: { authorization: "Bearer test" }
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
     });
 
     expect(response.statusCode).toBe(200);
@@ -267,7 +303,8 @@ describe("activity routes", () => {
     const response = await server.inject({
       method: "POST",
       url: `/v1/activities/${assignment.id}/complete`,
-      headers: { authorization: "Bearer test" }
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
     });
 
     expect(response.statusCode).toBe(409);
@@ -295,7 +332,8 @@ describe("activity routes", () => {
     const response = await server.inject({
       method: "POST",
       url: `/v1/activities/${assignment.id}/complete`,
-      headers: { authorization: "Bearer test" }
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
     });
 
     expect(response.statusCode).toBe(404);
@@ -307,7 +345,46 @@ describe("activity routes", () => {
 
     await server.close();
   });
+
+  it("skips an active activity without rewards", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/skip`,
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      assignmentId: assignment.id,
+      status: ActivityAssignmentStatus.skipped,
+      rewarded: false
+    });
+    expect(store.rewardLedger).toHaveLength(0);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "activity.skipped"
+        })
+      ])
+    );
+
+    await server.close();
+  });
 });
+
+function gameInteractionProgress() {
+  return {
+    interaction: {
+      completedStepIds: ["notice"],
+      miniGameResults: {
+        mini_game: { passed: true, score: 3 }
+      }
+    }
+  };
+}
 
 async function buildTestServer(store: TestStore) {
   const server = Fastify({ logger: false });
