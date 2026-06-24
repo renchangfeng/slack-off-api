@@ -19,9 +19,11 @@ import {
 } from "../activities/interaction.js";
 import {
   canonicalActivityCategories,
+  activitySkipReasons,
   isCanonicalActivityCategory,
   normalizeActivityCategory,
   recommendActivity,
+  type ActivitySkipReason,
   type CanonicalActivityCategory
 } from "../activities/recommendation.js";
 import { fail, ok } from "../http/envelope.js";
@@ -157,15 +159,19 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       });
 
       const states = await buildActivityStates(server, request.user!.id, templates, now);
+      const recentSkipReasons = await loadRecentSkipReasons(server, request.user!.id);
       const recommendation = recommendActivity(states.map((state) => ({
         value: state.template,
         category: state.category,
         eligible: state.eligible,
+        difficulty: state.template.difficulty,
+        interactionSummary: summarizeActivityInteraction(buildActivityInteraction(state.template)),
         completedCount: state.completedCount,
         categoryCompletionCount: state.categoryCompletionCount,
         lastUsedAt: state.lastUsedAt
       })), {
         preferredCategory,
+        recentSkipReasons,
         now
       });
       if (!recommendation) {
@@ -437,11 +443,22 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           properties: {
             assignmentId: { type: "string", format: "uuid" }
           }
+        },
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            reason: { type: "string", enum: activitySkipReasons }
+          }
         }
       }
     },
     async (request, reply) => {
       const params = request.params as { assignmentId: string };
+      const body = (request.body ?? {}) as { reason?: ActivitySkipReason };
+      const reason = body.reason && activitySkipReasons.includes(body.reason)
+        ? body.reason
+        : undefined;
       const assignment = await server.prisma.activityAssignment.findUnique({
         where: { id: params.assignmentId },
         include: { template: true }
@@ -468,13 +485,40 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         targetUserId: request.user!.id,
         sourceType: "activity_assignment",
         sourceId: assignment.id,
-        metadata: { templateCode: assignment.template.code },
+        metadata: { templateCode: assignment.template.code, reason: reason ?? null },
         trace: request.trace
       });
 
       return ok(serializeAssignment({ ...assignment, ...skipped }));
     }
   );
+}
+
+async function loadRecentSkipReasons(
+  server: FastifyInstance,
+  userId: string
+): Promise<ActivitySkipReason[]> {
+  const events = await server.prisma.auditEvent.findMany({
+    where: {
+      actorUserId: userId,
+      eventType: "activity.skipped"
+    },
+    orderBy: { createdAt: "desc" },
+    take: 10
+  });
+
+  return events
+    .map((event) => {
+      const metadata = event.metadata;
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+        return null;
+      }
+      const reason = (metadata as { reason?: unknown }).reason;
+      return typeof reason === "string" && activitySkipReasons.includes(reason as ActivitySkipReason)
+        ? (reason as ActivitySkipReason)
+        : null;
+    })
+    .filter((reason): reason is ActivitySkipReason => reason !== null);
 }
 
 type ActivityState = {

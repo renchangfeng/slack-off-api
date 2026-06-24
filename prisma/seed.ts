@@ -5,6 +5,7 @@ import {
   BeanRarity,
   BeanTheme,
   CosmeticType,
+  Prisma,
   PrismaClient
 } from "@prisma/client";
 
@@ -217,6 +218,31 @@ const achievements = [
   }
 ];
 
+function withInteraction(
+  rewardConfig: Prisma.InputJsonObject,
+  interaction: Prisma.InputJsonObject
+) {
+  return {
+    ...rewardConfig,
+    interaction
+  };
+}
+
+function guidedInteraction(
+  estimatedSeconds: number,
+  proofPolicy: string,
+  steps: Prisma.InputJsonValue[],
+  completionFeedback: string[]
+) {
+  return {
+    mode: "guided",
+    estimatedSeconds,
+    proofPolicy,
+    steps,
+    completionFeedback
+  };
+}
+
 const activities = [
   // Mini-games
   {
@@ -225,7 +251,37 @@ const activities = [
     description: "不要解释，这是手眼协调训练。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 8, drawProgress: 1 },
+    rewardConfig: withInteraction(
+      { score: 8, drawProgress: 1 },
+      guidedInteraction(
+        90,
+        "external_game",
+        [
+          {
+            id: "pick_game",
+            type: "choice",
+            title: "先选今天的通关姿势",
+            description: "选一个你准备使用的摸鱼战术。",
+            required: true,
+            options: [
+              { id: "combo", label: "连击流", resultText: "今天靠手速混过去。" },
+              { id: "careful", label: "稳健流", resultText: "慢一点，但显得很专业。" },
+              { id: "chaos", label: "随缘流", resultText: "命运会自己安排三消。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "连点 5 下完成占位小游戏",
+            description: "当前先用轻互动占位，后续可接独立小游戏工程。",
+            required: true,
+            gameCode: "tap_combo",
+            requiredResult: "完成 5 次有效点击"
+          }
+        ],
+        ["消消乐训练结束，大脑成功假装换了一块显卡。"]
+      )
+    ),
     cooldownSeconds: 60 * 60 * 6,
     dailyRewardLimit: 1
   },
@@ -287,7 +343,31 @@ const activities = [
     description: "假装你在分析液体动力学。",
     category: ActivityCategory.rest,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 3 },
+    rewardConfig: withInteraction(
+      { score: 3 },
+      guidedInteraction(
+        35,
+        "none",
+        [
+          {
+            id: "ready",
+            type: "ack",
+            title: "把水杯放进视野中心",
+            description: "如果没有水杯，任意安全杯状物都可以临时上岗。",
+            required: true
+          },
+          {
+            id: "stare_timer",
+            type: "timer",
+            title: "盯住 30 秒",
+            description: "观察它，不评价它，也不要顺手打开新消息。",
+            required: true,
+            durationSeconds: 30
+          }
+        ],
+        ["水杯已被充分研究，世界暂时没有变坏。"]
+      )
+    ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 3
   },
@@ -349,7 +429,35 @@ const activities = [
     description: "眉头微皱，像是在等一个很重要的接口。",
     category: ActivityCategory.office_theater,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        45,
+        "none",
+        [
+          {
+            id: "choose_face",
+            type: "choice",
+            title: "选择加载中表情",
+            description: "要低调，但要让人相信你正在处理一件复杂的事。",
+            required: true,
+            options: [
+              { id: "latency", label: "接口延迟脸", resultText: "像是在等某个响应。" },
+              { id: "deep_bug", label: "深层问题脸", resultText: "像是看见了历史包袱。" },
+              { id: "budget", label: "预算不足脸", resultText: "像是方案被砍过三轮。" }
+            ]
+          },
+          {
+            id: "performance",
+            type: "ack",
+            title: "维持 10 秒",
+            description: "不要过火，办公室表演的核心是可撤回。",
+            required: true
+          }
+        ],
+        ["加载中表情验收通过，空气认为你很忙。"]
+      )
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -411,7 +519,31 @@ const activities = [
     description: "动作轻一点，不与工位进行力量对抗。",
     category: ActivityCategory.physical,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        30,
+        "none",
+        [
+          {
+            id: "safety",
+            type: "ack",
+            title: "确认动作舒适",
+            description: "如果疼或不舒服，直接换任务，身体优先。",
+            required: true
+          },
+          {
+            id: "roll_timer",
+            type: "timer",
+            title: "跟着节奏转 6 次",
+            description: "慢慢来，肩膀不是 KPI，不用冲刺。",
+            required: true,
+            durationSeconds: 20
+          }
+        ],
+        ["肩膀从待机模式回来了，工位气氛稍微松了一点。"]
+      )
+    ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
   },
@@ -483,7 +615,28 @@ const activities = [
     description: "例如“跨部门空气协调专家”，不用告诉任何人。",
     category: ActivityCategory.imagination,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        25,
+        "none",
+        [
+          {
+            id: "title_style",
+            type: "choice",
+            title: "选择职称风格",
+            description: "系统不会真的写进花名册，请放心胡来。",
+            required: true,
+            options: [
+              { id: "air", label: "空气治理系", resultText: "跨部门空气协调专家上线。" },
+              { id: "chair", label: "工位生态系", resultText: "人体工学椅外交官上线。" },
+              { id: "meeting", label: "会议玄学系", resultText: "议程走向观测员上线。" }
+            ]
+          }
+        ],
+        ["荒诞职称已生成，你现在拥有一份不会加班的头衔。"]
+      )
+    ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
   },

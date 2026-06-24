@@ -746,6 +746,9 @@ components:
                 type: boolean
               score:
                 type: integer
+    ActivitySkipReason:
+      type: string
+      enum: [too_much_work, not_interested, not_convenient, want_weirder, other]
     ActivityAssignment:
       type: object
       required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, interaction, interactionSummary, assignedAt, completedAt, expiresAt, rewarded]
@@ -930,6 +933,8 @@ paths:
                   type: string
                   minLength: 8
                   maxLength: 128
+                interaction:
+                  $ref: "#/components/schemas/ActivityInteractionProgress"
                 theme:
                   type: string
                   enum: [office, restroom, daydream]
@@ -1450,6 +1455,16 @@ paths:
           schema:
             type: string
             format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                reason:
+                  $ref: "#/components/schemas/ActivitySkipReason"
       responses:
         "200":
           description: Skipped activity assignment

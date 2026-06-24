@@ -51,6 +51,38 @@ describe("activity recommendations", () => {
 
     expect(result?.value).toBe("ready");
   });
+
+  it("uses recent skip feedback to avoid inconvenient timed activities", () => {
+    const result = recommendActivity(
+      [
+        candidate("walk", {
+          category: "physical",
+          completedCount: 0,
+          interactionSummary: { estimatedSeconds: 35, hasTimer: true, hasMiniGame: false }
+        }),
+        candidate("choice", {
+          category: "imagination",
+          completedCount: 0,
+          interactionSummary: { estimatedSeconds: 20, hasTimer: false, hasMiniGame: false }
+        })
+      ],
+      { now, recentSkipReasons: ["not_convenient"], random: () => 0 }
+    );
+
+    expect(result?.value).toBe("choice");
+  });
+
+  it("boosts weird activities when the user asks for something weirder", () => {
+    const result = recommendActivity(
+      [
+        candidate("rest", { category: "rest", completedCount: 0 }),
+        candidate("weird", { category: "office_theater", completedCount: 1 })
+      ],
+      { now, recentSkipReasons: ["want_weirder"], random: () => 0 }
+    );
+
+    expect(result?.value).toBe("weird");
+  });
 });
 
 function candidate(
@@ -61,12 +93,20 @@ function candidate(
     completedCount: number;
     categoryCompletionCount: number;
     lastUsedAt: Date | null;
+    difficulty: string;
+    interactionSummary: {
+      estimatedSeconds: number;
+      hasTimer: boolean;
+      hasMiniGame: boolean;
+    };
   }> = {}
 ) {
   return {
     value,
     category: overrides.category ?? (value === "physical" ? "physical" : "rest"),
     eligible: overrides.eligible ?? true,
+    difficulty: overrides.difficulty ?? "easy",
+    interactionSummary: overrides.interactionSummary,
     completedCount: overrides.completedCount ?? 1,
     categoryCompletionCount: overrides.categoryCompletionCount ?? 0,
     lastUsedAt: overrides.lastUsedAt ?? null

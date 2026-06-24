@@ -14,10 +14,26 @@ export type RecommendationCandidate<T> = {
   value: T;
   category: CanonicalActivityCategory;
   eligible: boolean;
+  difficulty?: string;
+  interactionSummary?: {
+    estimatedSeconds: number;
+    hasTimer: boolean;
+    hasMiniGame: boolean;
+  };
   completedCount: number;
   categoryCompletionCount: number;
   lastUsedAt: Date | null;
 };
+
+export const activitySkipReasons = [
+  "too_much_work",
+  "not_interested",
+  "not_convenient",
+  "want_weirder",
+  "other"
+] as const;
+
+export type ActivitySkipReason = (typeof activitySkipReasons)[number];
 
 export type RecommendationResult<T> = {
   value: T;
@@ -45,6 +61,7 @@ export function recommendActivity<T>(
   candidates: RecommendationCandidate<T>[],
   options: {
     preferredCategory?: CanonicalActivityCategory;
+    recentSkipReasons?: ActivitySkipReason[];
     now: Date;
     random?: () => number;
   }
@@ -77,6 +94,36 @@ export function recommendActivity<T>(
         options.now.getTime() - candidate.lastUsedAt.getTime() < 24 * 60 * 60 * 1000
       ) {
         score -= 8;
+      }
+
+      for (const skipReason of options.recentSkipReasons ?? []) {
+        if (
+          skipReason === "too_much_work" &&
+          (candidate.difficulty === "hard" || (candidate.interactionSummary?.estimatedSeconds ?? 0) > 60)
+        ) {
+          score -= 7;
+        }
+
+        if (
+          skipReason === "not_convenient" &&
+          (candidate.category === "physical" || candidate.interactionSummary?.hasTimer)
+        ) {
+          score -= 6;
+        }
+
+        if (skipReason === "not_interested" && candidate.completedCount > 0) {
+          score -= 5;
+        }
+
+        if (
+          skipReason === "want_weirder" &&
+          (candidate.category === "imagination" || candidate.category === "office_theater")
+        ) {
+          score += 14;
+          if (reason === "AVAILABLE_NOW") {
+            reason = "TRY_SOMETHING_NEW";
+          }
+        }
       }
 
       return {

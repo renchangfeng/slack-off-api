@@ -353,7 +353,8 @@ describe("activity routes", () => {
     const response = await server.inject({
       method: "POST",
       url: `/v1/activities/${assignment.id}/skip`,
-      headers: { authorization: "Bearer test" }
+      headers: { authorization: "Bearer test" },
+      payload: { reason: "not_interested" }
     });
 
     expect(response.statusCode).toBe(200);
@@ -366,7 +367,8 @@ describe("activity routes", () => {
     expect(store.auditEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          eventType: "activity.skipped"
+          eventType: "activity.skipped",
+          metadata: expect.objectContaining({ reason: "not_interested" })
         })
       ])
     );
@@ -593,6 +595,19 @@ function createPrismaMock(store: TestStore) {
       count: async () => 0
     },
     auditEvent: {
+      findMany: async ({
+        where,
+        take
+      }: {
+        where: { actorUserId: string; eventType: string };
+        take?: number;
+      }) =>
+        store.auditEvents
+          .filter(
+            (event) =>
+              event.actorUserId === where.actorUserId && event.eventType === where.eventType
+          )
+          .slice(0, take),
       create: async ({ data }: { data: Record<string, unknown> }) => {
         store.auditEvents.push(data);
         return data;
