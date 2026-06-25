@@ -884,9 +884,30 @@ components:
     ActivitySkipReason:
       type: string
       enum: [too_much_work, not_interested, not_convenient, want_weirder, other]
+    ActivityPresentation:
+      type: object
+      required: [badge, tone, accentColor, headline, scene, prompt, statLabel, statValue]
+      properties:
+        badge:
+          type: string
+        tone:
+          type: string
+          enum: [absurd, calm, game, physical, daydream]
+        accentColor:
+          type: string
+        headline:
+          type: string
+        scene:
+          type: string
+        prompt:
+          type: string
+        statLabel:
+          type: string
+        statValue:
+          type: string
     ActivityAssignment:
       type: object
-      required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, interaction, interactionSummary, assignedAt, completedAt, expiresAt, rewarded]
+      required: [assignmentId, code, title, description, category, difficulty, status, rewardPreview, presentation, interaction, interactionSummary, assignedAt, completedAt, expiresAt, rewarded]
       properties:
         assignmentId:
           type: string
@@ -914,6 +935,8 @@ components:
               type: integer
             drawProgress:
               type: integer
+        presentation:
+          $ref: "#/components/schemas/ActivityPresentation"
         interaction:
           $ref: "#/components/schemas/ActivityInteraction"
         interactionSummary:
@@ -936,7 +959,7 @@ components:
           type: string
     ActivityCatalogItem:
       type: object
-      required: [templateId, code, title, description, category, difficulty, rewardPreview, interactionSummary, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
+      required: [templateId, code, title, description, category, difficulty, rewardPreview, presentation, interactionSummary, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
       properties:
         templateId:
           type: string
@@ -961,6 +984,8 @@ components:
               type: integer
             drawProgress:
               type: integer
+        presentation:
+          $ref: "#/components/schemas/ActivityPresentation"
         interactionSummary:
           $ref: "#/components/schemas/ActivityInteractionSummary"
         eligible:

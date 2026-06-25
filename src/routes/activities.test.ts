@@ -66,6 +66,16 @@ describe("activity routes", () => {
         score: 8,
         drawProgress: 1
       },
+      presentation: expect.objectContaining({
+        badge: expect.any(String),
+        tone: "game",
+        accentColor: expect.any(String),
+        headline: "完成消消乐 3 关",
+        scene: expect.any(String),
+        prompt: expect.any(String),
+        statLabel: expect.any(String),
+        statValue: expect.stringMatching(/%$/)
+      }),
       interaction: expect.objectContaining({
         mode: "guided",
         flavorLabel: expect.any(String),
@@ -122,6 +132,11 @@ describe("activity routes", () => {
           category: "game",
           eligible: false,
           completedCount: 1,
+          presentation: expect.objectContaining({
+            badge: expect.any(String),
+            tone: "game",
+            headline: "完成消消乐 3 关"
+          }),
           interactionSummary: expect.objectContaining({
             hasMiniGame: true,
             flavorLabel: expect.any(String)
@@ -217,6 +232,10 @@ describe("activity routes", () => {
     expect(response.json().data.feedback).toEqual(expect.any(String));
     expect(response.json().data.resultTitle).toEqual(expect.any(String));
     expect(response.json().data.resultCopy).toEqual(expect.any(String));
+    expect(response.json().data.assignment.presentation).toMatchObject({
+      tone: "game",
+      headline: "完成消消乐 3 关"
+    });
     expect(store.assignments[0]).toMatchObject({
       status: ActivityAssignmentStatus.completed,
       rewarded: true

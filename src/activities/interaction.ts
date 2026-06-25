@@ -44,6 +44,24 @@ export type ActivityInteractionSummary = {
   flavorLabel: string;
 };
 
+export type ActivityPresentationTone =
+  | "absurd"
+  | "calm"
+  | "game"
+  | "physical"
+  | "daydream";
+
+export type ActivityPresentation = {
+  badge: string;
+  tone: ActivityPresentationTone;
+  accentColor: string;
+  headline: string;
+  scene: string;
+  prompt: string;
+  statLabel: string;
+  statValue: string;
+};
+
 export type ActivityInteractionProgress = {
   completedStepIds?: string[];
   timerSeconds?: Record<string, number>;
@@ -157,6 +175,31 @@ export function summarizeActivityInteraction(
   };
 }
 
+export function buildActivityPresentation(template: Pick<
+  ActivityTemplate,
+  "code" | "title" | "description" | "category" | "difficulty" | "rewardConfig"
+>): ActivityPresentation {
+  const category = normalizeActivityCategory(template.category);
+  const defaults = defaultActivityPresentation({
+    code: template.code,
+    title: template.title,
+    description: template.description,
+    category,
+    difficulty: template.difficulty
+  });
+  const configured = readConfiguredPresentation(template.rewardConfig);
+  return {
+    ...defaults,
+    ...configured,
+    headline: configured?.headline?.trim() || defaults.headline,
+    scene: configured?.scene?.trim() || defaults.scene,
+    prompt: configured?.prompt?.trim() || defaults.prompt,
+    badge: configured?.badge?.trim() || defaults.badge,
+    statLabel: configured?.statLabel?.trim() || defaults.statLabel,
+    statValue: configured?.statValue?.trim() || defaults.statValue
+  };
+}
+
 export function validateActivityInteractionProgress(
   interaction: ActivityInteraction,
   progress: ActivityInteractionProgress | undefined
@@ -261,6 +304,116 @@ function readConfiguredInteraction(value: Prisma.JsonValue): ActivityInteraction
           copy: "这次短暂离线已被系统记录，奖励也安排上了。"
         }
   };
+}
+
+function readConfiguredPresentation(value: Prisma.JsonValue): Partial<ActivityPresentation> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const maybe = (value as { presentation?: unknown }).presentation;
+  if (!maybe || typeof maybe !== "object" || Array.isArray(maybe)) {
+    return null;
+  }
+  const presentation = maybe as Partial<ActivityPresentation>;
+  const tone = isPresentationTone(presentation.tone) ? presentation.tone : undefined;
+  return {
+    badge: typeof presentation.badge === "string" ? presentation.badge : undefined,
+    tone,
+    accentColor: typeof presentation.accentColor === "string"
+      ? presentation.accentColor
+      : undefined,
+    headline: typeof presentation.headline === "string" ? presentation.headline : undefined,
+    scene: typeof presentation.scene === "string" ? presentation.scene : undefined,
+    prompt: typeof presentation.prompt === "string" ? presentation.prompt : undefined,
+    statLabel: typeof presentation.statLabel === "string" ? presentation.statLabel : undefined,
+    statValue: typeof presentation.statValue === "string" ? presentation.statValue : undefined
+  };
+}
+
+function defaultActivityPresentation(input: {
+  code: string;
+  title: string;
+  description: string;
+  category: ReturnType<typeof normalizeActivityCategory>;
+  difficulty: ActivityTemplate["difficulty"];
+}): ActivityPresentation {
+  const statValue = playfulStatValue(input.code, input.difficulty);
+  if (input.category === "game") {
+    return {
+      badge: "小游戏入口",
+      tone: "game",
+      accentColor: "#6655d8",
+      headline: input.title,
+      scene: "屏幕前的短暂叛逃，手指负责把大脑带离工位。",
+      prompt: input.description,
+      statLabel: "手眼协调",
+      statValue
+    };
+  }
+
+  if (input.category === "rest") {
+    return {
+      badge: "精神离线",
+      tone: "calm",
+      accentColor: "#1f8f62",
+      headline: input.title,
+      scene: "把注意力从消息红点里拽出来，给自己留一小块静音区。",
+      prompt: input.description,
+      statLabel: "回血概率",
+      statValue
+    };
+  }
+
+  if (input.category === "physical") {
+    return {
+      badge: "身体重启",
+      tone: "physical",
+      accentColor: "#b9821f",
+      headline: input.title,
+      scene: "椅子已经连续获胜太久，现在轮到身体拿回一点控制权。",
+      prompt: input.description,
+      statLabel: "关节上线",
+      statValue
+    };
+  }
+
+  if (input.category === "imagination") {
+    return {
+      badge: "脑洞逃逸",
+      tone: "daydream",
+      accentColor: "#2d7d90",
+      headline: input.title,
+      scene: "现实先放旁边，给脑内小剧场批准一张临时通行证。",
+      prompt: input.description,
+      statLabel: "离谱指数",
+      statValue
+    };
+  }
+
+  return {
+    badge: "工位表演",
+    tone: "absurd",
+    accentColor: "#8b4d36",
+    headline: input.title,
+    scene: "这是一场不需要观众的办公室独幕剧，表演结束就能继续装忙。",
+    prompt: input.description,
+    statLabel: "戏剧张力",
+    statValue
+  };
+}
+
+function playfulStatValue(code: string, difficulty: ActivityTemplate["difficulty"]): string {
+  const base = difficulty === "hard" ? 70 : difficulty === "normal" ? 55 : 40;
+  const hash = [...code].reduce((total, char) => total + char.charCodeAt(0), 0);
+  return `${Math.min(96, base + (hash % 22))}%`;
+}
+
+function isPresentationTone(value: unknown): value is ActivityPresentationTone {
+  return value === "absurd" ||
+    value === "calm" ||
+    value === "game" ||
+    value === "physical" ||
+    value === "daydream";
 }
 
 function defaultFlavorLabel(steps: ActivityInteractionStep[]): string {

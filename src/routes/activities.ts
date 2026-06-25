@@ -12,6 +12,7 @@ import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import {
   buildActivityInteraction,
+  buildActivityPresentation,
   pickCompletionFeedback,
   summarizeActivityInteraction,
   validateActivityInteractionProgress,
@@ -608,6 +609,7 @@ async function buildActivityStates(
 function serializeCatalogItem(state: ActivityState, now: Date) {
   const reward = toRewardConfig(state.template.rewardConfig);
   const interaction = buildActivityInteraction(state.template);
+  const presentation = buildActivityPresentation(state.template);
   return {
     templateId: state.template.id,
     code: state.template.code,
@@ -619,6 +621,7 @@ function serializeCatalogItem(state: ActivityState, now: Date) {
       score: reward.score ?? 0,
       drawProgress: reward.drawProgress ?? 0
     },
+    presentation,
     interactionSummary: summarizeActivityInteraction(interaction),
     eligible: state.eligible,
     cooldownRemainingSeconds: state.cooldownRemainingSeconds,
@@ -670,6 +673,7 @@ function serializeAssignment(assignment: {
 }) {
   const reward = toRewardConfig(assignment.template.rewardConfig);
   const interaction = buildActivityInteraction(assignment.template);
+  const presentation = buildActivityPresentation(assignment.template);
   return {
     assignmentId: assignment.id,
     code: assignment.template.code,
@@ -682,6 +686,7 @@ function serializeAssignment(assignment: {
       score: reward.score ?? 0,
       drawProgress: reward.drawProgress ?? 0
     },
+    presentation,
     interaction,
     interactionSummary: summarizeActivityInteraction(interaction),
     assignedAt: assignment.assignedAt.toISOString(),
