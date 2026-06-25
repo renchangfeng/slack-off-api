@@ -41,6 +41,35 @@ export type RecommendationResult<T> = {
   reason: "PREFERRED_CATEGORY" | "TRY_SOMETHING_NEW" | "MATCHES_HISTORY" | "AVAILABLE_NOW";
 };
 
+export function explainActivityRecommendation(input: {
+  reason: RecommendationResult<unknown>["reason"] | "ACTIVE_ASSIGNMENT";
+  preferredCategory?: CanonicalActivityCategory;
+  recentSkipReasons?: ActivitySkipReason[];
+}): string {
+  if (input.reason === "ACTIVE_ASSIGNMENT") {
+    return "你已经有一个进行中的任务，先把这次摸鱼坐实。";
+  }
+  if (input.recentSkipReasons?.includes("want_weirder")) {
+    return "刚才你想来点怪的，所以这次偏脑洞和表演一点。";
+  }
+  if (input.recentSkipReasons?.includes("not_convenient")) {
+    return "刚才你觉得不方便，所以这次尽量避开太折腾的任务。";
+  }
+  if (input.recentSkipReasons?.includes("too_much_work")) {
+    return "刚才你嫌太麻烦，所以这次优先挑轻一点的任务。";
+  }
+  if (input.reason === "PREFERRED_CATEGORY" && input.preferredCategory) {
+    return `按你选的${categoryLabel(input.preferredCategory)}偏好推荐。`;
+  }
+  if (input.reason === "TRY_SOMETHING_NEW") {
+    return "这项你还没怎么做过，适合换个频道试一下。";
+  }
+  if (input.reason === "MATCHES_HISTORY") {
+    return "按你最近完成过的类型继续推荐，手感应该比较顺。";
+  }
+  return "当前可做且冷却通过，适合顺手完成。";
+}
+
 export function normalizeActivityCategory(
   category: ActivityCategory | string
 ): CanonicalActivityCategory {
@@ -49,6 +78,16 @@ export function normalizeActivityCategory(
   }
 
   return category as CanonicalActivityCategory;
+}
+
+function categoryLabel(category: CanonicalActivityCategory): string {
+  return {
+    rest: "安静休息",
+    game: "小游戏",
+    office_theater: "办公室表演",
+    physical: "身体活动",
+    imagination: "脑洞任务"
+  }[category];
 }
 
 export function isCanonicalActivityCategory(

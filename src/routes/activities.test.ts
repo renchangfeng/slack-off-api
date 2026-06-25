@@ -61,12 +61,18 @@ describe("activity routes", () => {
       difficulty: ActivityDifficulty.normal,
       status: ActivityAssignmentStatus.active,
       recommendationReason: "TRY_SOMETHING_NEW",
+      recommendationExplanation: expect.any(String),
       rewardPreview: {
         score: 8,
         drawProgress: 1
       },
       interaction: expect.objectContaining({
         mode: "guided",
+        flavorLabel: expect.any(String),
+        resultSummary: expect.objectContaining({
+          title: expect.any(String),
+          copy: expect.any(String)
+        }),
         steps: expect.arrayContaining([
           expect.objectContaining({ id: "notice", type: "ack" }),
           expect.objectContaining({ id: "mini_game", type: "mini_game" })
@@ -74,7 +80,8 @@ describe("activity routes", () => {
       }),
       interactionSummary: expect.objectContaining({
         stepCount: 2,
-        hasMiniGame: true
+        hasMiniGame: true,
+        flavorLabel: expect.any(String)
       })
     });
     expect(store.assignments).toHaveLength(1);
@@ -115,7 +122,10 @@ describe("activity routes", () => {
           category: "game",
           eligible: false,
           completedCount: 1,
-          interactionSummary: expect.objectContaining({ hasMiniGame: true })
+          interactionSummary: expect.objectContaining({
+            hasMiniGame: true,
+            flavorLabel: expect.any(String)
+          })
         }
       ]
     });
@@ -205,6 +215,8 @@ describe("activity routes", () => {
       reason: null
     });
     expect(response.json().data.feedback).toEqual(expect.any(String));
+    expect(response.json().data.resultTitle).toEqual(expect.any(String));
+    expect(response.json().data.resultCopy).toEqual(expect.any(String));
     expect(store.assignments[0]).toMatchObject({
       status: ActivityAssignmentStatus.completed,
       rewarded: true

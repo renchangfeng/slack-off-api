@@ -25,8 +25,13 @@ export type ActivityInteraction = {
   mode: "guided";
   estimatedSeconds: number;
   proofPolicy: ActivityProofPolicy;
+  flavorLabel: string;
   steps: ActivityInteractionStep[];
   completionFeedback: string[];
+  resultSummary: {
+    title: string;
+    copy: string;
+  };
 };
 
 export type ActivityInteractionSummary = {
@@ -36,6 +41,7 @@ export type ActivityInteractionSummary = {
   hasChoice: boolean;
   hasMiniGame: boolean;
   proofPolicy: ActivityProofPolicy;
+  flavorLabel: string;
 };
 
 export type ActivityInteractionProgress = {
@@ -146,7 +152,8 @@ export function summarizeActivityInteraction(
     hasTimer: interaction.steps.some((step) => step.type === "timer"),
     hasChoice: interaction.steps.some((step) => step.type === "choice"),
     hasMiniGame: interaction.steps.some((step) => step.type === "mini_game"),
-    proofPolicy: interaction.proofPolicy
+    proofPolicy: interaction.proofPolicy,
+    flavorLabel: interaction.flavorLabel
   };
 }
 
@@ -174,14 +181,21 @@ function interaction(
   estimatedSeconds: number,
   proofPolicy: ActivityProofPolicy,
   steps: ActivityInteractionStep[],
-  completionFeedback: string[]
+  completionFeedback: string[],
+  resultSummary?: ActivityInteraction["resultSummary"],
+  flavorLabel?: string
 ): ActivityInteraction {
   return {
     mode: "guided",
     estimatedSeconds,
     proofPolicy,
+    flavorLabel: flavorLabel ?? defaultFlavorLabel(steps),
     steps,
-    completionFeedback
+    completionFeedback,
+    resultSummary: resultSummary ?? {
+      title: "摸鱼任务完成",
+      copy: "这次短暂离线已被系统记录，奖励也安排上了。"
+    }
   };
 }
 
@@ -233,9 +247,35 @@ function readConfiguredInteraction(value: Prisma.JsonValue): ActivityInteraction
     mode: "guided",
     estimatedSeconds: Number(interaction.estimatedSeconds ?? 30),
     proofPolicy: interaction.proofPolicy ?? "none",
+    flavorLabel: typeof interaction.flavorLabel === "string"
+      ? interaction.flavorLabel
+      : defaultFlavorLabel(interaction.steps),
     steps: interaction.steps,
     completionFeedback: Array.isArray(interaction.completionFeedback)
       ? interaction.completionFeedback
-      : []
+      : [],
+    resultSummary: isResultSummary(interaction.resultSummary)
+      ? interaction.resultSummary
+      : {
+          title: "摸鱼任务完成",
+          copy: "这次短暂离线已被系统记录，奖励也安排上了。"
+        }
   };
+}
+
+function defaultFlavorLabel(steps: ActivityInteractionStep[]): string {
+  if (steps.some((step) => step.type === "mini_game")) return "小游戏";
+  if (steps.some((step) => step.type === "timer")) return "倒计时";
+  if (steps.some((step) => step.type === "choice")) return "选择题";
+  return "轻确认";
+}
+
+function isResultSummary(value: unknown): value is ActivityInteraction["resultSummary"] {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      typeof (value as { title?: unknown }).title === "string" &&
+      typeof (value as { copy?: unknown }).copy === "string"
+  );
 }

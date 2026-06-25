@@ -617,15 +617,31 @@ components:
         nearest:
           type: array
           items:
-            $ref: "#/components/schemas/Achievement"
+            $ref: "#/components/schemas/AchievementRecommendation"
         today:
           type: array
           items:
-            $ref: "#/components/schemas/Achievement"
+            $ref: "#/components/schemas/AchievementRecommendation"
         long_term:
           type: array
           items:
-            $ref: "#/components/schemas/Achievement"
+            $ref: "#/components/schemas/AchievementRecommendation"
+    AchievementRecommendation:
+      allOf:
+        - $ref: "#/components/schemas/Achievement"
+        - type: object
+          required: [recommendationGroup, recommendationReason, remainingEffortLabel, targetSection]
+          properties:
+            recommendationGroup:
+              type: string
+              enum: [nearest, today, long_term]
+            recommendationReason:
+              type: string
+            remainingEffortLabel:
+              type: string
+            targetSection:
+              type: string
+              enum: [home, activities, beans, leaderboards, profile]
     AchievementList:
       type: object
       required: [achievements, recommendations]
@@ -729,7 +745,7 @@ components:
           type: string
     ActivityInteraction:
       type: object
-      required: [mode, estimatedSeconds, proofPolicy, steps, completionFeedback]
+      required: [mode, estimatedSeconds, proofPolicy, flavorLabel, steps, completionFeedback, resultSummary]
       properties:
         mode:
           type: string
@@ -739,6 +755,8 @@ components:
         proofPolicy:
           type: string
           enum: [none, optional_photo, optional_location, external_game]
+        flavorLabel:
+          type: string
         steps:
           type: array
           items:
@@ -747,9 +765,17 @@ components:
           type: array
           items:
             type: string
+        resultSummary:
+          type: object
+          required: [title, copy]
+          properties:
+            title:
+              type: string
+            copy:
+              type: string
     ActivityInteractionSummary:
       type: object
-      required: [stepCount, estimatedSeconds, hasTimer, hasChoice, hasMiniGame, proofPolicy]
+      required: [stepCount, estimatedSeconds, hasTimer, hasChoice, hasMiniGame, proofPolicy, flavorLabel]
       properties:
         stepCount:
           type: integer
@@ -764,6 +790,8 @@ components:
         proofPolicy:
           type: string
           enum: [none, optional_photo, optional_location, external_game]
+        flavorLabel:
+          type: string
     ActivityInteractionProgress:
       type: object
       additionalProperties: false
@@ -840,6 +868,8 @@ components:
         recommendationReason:
           type: string
           enum: [PREFERRED_CATEGORY, TRY_SOMETHING_NEW, MATCHES_HISTORY, AVAILABLE_NOW, ACTIVE_ASSIGNMENT]
+        recommendationExplanation:
+          type: string
     ActivityCatalogItem:
       type: object
       required: [templateId, code, title, description, category, difficulty, rewardPreview, interactionSummary, eligible, cooldownRemainingSeconds, completedCount, lastCompletedAt, checkedAt]
@@ -909,11 +939,15 @@ components:
             $ref: "#/components/schemas/ActivityAssignment"
     ActivityCompleteResult:
       type: object
-      required: [assignment, reward, feedback]
+      required: [assignment, reward, feedback, resultTitle, resultCopy]
       properties:
         assignment:
           $ref: "#/components/schemas/ActivityAssignment"
         feedback:
+          type: string
+        resultTitle:
+          type: string
+        resultCopy:
           type: string
         reward:
           type: object

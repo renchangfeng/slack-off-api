@@ -20,6 +20,7 @@ import {
 import {
   canonicalActivityCategories,
   activitySkipReasons,
+  explainActivityRecommendation,
   isCanonicalActivityCategory,
   normalizeActivityCategory,
   recommendActivity,
@@ -142,7 +143,10 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       if (active && (!active.expiresAt || active.expiresAt > now)) {
         return ok({
           ...serializeAssignment(active),
-          recommendationReason: "ACTIVE_ASSIGNMENT"
+          recommendationReason: "ACTIVE_ASSIGNMENT",
+          recommendationExplanation: explainActivityRecommendation({
+            reason: "ACTIVE_ASSIGNMENT"
+          })
         });
       }
 
@@ -211,14 +215,24 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           templateCode: template.code,
           difficulty: template.difficulty,
           preferredCategory: preferredCategory ?? null,
-          recommendationReason: recommendation.reason
+          recommendationReason: recommendation.reason,
+          recommendationExplanation: explainActivityRecommendation({
+            reason: recommendation.reason,
+            preferredCategory,
+            recentSkipReasons
+          })
         },
         trace: request.trace
       });
 
       return ok({
         ...serializeAssignment(assignment),
-        recommendationReason: recommendation.reason
+        recommendationReason: recommendation.reason,
+        recommendationExplanation: explainActivityRecommendation({
+          reason: recommendation.reason,
+          preferredCategory,
+          recentSkipReasons
+        })
       });
     }
   );
@@ -426,7 +440,9 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           ...reward,
           achievementsUnlocked
         },
-        feedback: pickCompletionFeedback(interaction, assignment.id)
+        feedback: pickCompletionFeedback(interaction, assignment.id),
+        resultTitle: interaction.resultSummary.title,
+        resultCopy: interaction.resultSummary.copy
       });
     }
   );

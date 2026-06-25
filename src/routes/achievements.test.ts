@@ -77,6 +77,38 @@ describe("achievement and cosmetic flows", () => {
     await server.close();
   });
 
+  it("returns actionable achievement recommendation context", async () => {
+    const store = createStore();
+    store.stats.totalSessions = 0;
+    const server = await buildTestServer(store);
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/achievements",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.recommendations.nearest[0]).toMatchObject({
+      code: "first_paid_pooping",
+      recommendationGroup: "nearest",
+      recommendationReason: expect.any(String),
+      remainingEffortLabel: "还差 1 次",
+      targetSection: "home",
+      actionHint: {
+        section: "home",
+        label: "去打卡"
+      }
+    });
+    expect(response.json().data.recommendations.today[0]).toMatchObject({
+      code: "first_paid_pooping",
+      recommendationGroup: "today",
+      remainingEffortLabel: "还差 1 次",
+      targetSection: "home"
+    });
+
+    await server.close();
+  });
+
   it("returns locked and owned cosmetics with unlock summaries", async () => {
     const store = createStore();
     const server = await buildTestServer(store);

@@ -292,14 +292,18 @@ function guidedInteraction(
   estimatedSeconds: number,
   proofPolicy: string,
   steps: Prisma.InputJsonValue[],
-  completionFeedback: string[]
+  completionFeedback: string[],
+  resultSummary?: Prisma.InputJsonObject,
+  flavorLabel?: string
 ) {
   return {
     mode: "guided",
     estimatedSeconds,
     proofPolicy,
     steps,
-    completionFeedback
+    completionFeedback,
+    ...(resultSummary ? { resultSummary } : {}),
+    ...(flavorLabel ? { flavorLabel } : {})
   };
 }
 
@@ -351,7 +355,39 @@ const activities = [
     description: "不是逃避现实，是训练风险识别。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 7, drawProgress: 1 },
+    rewardConfig: withInteraction(
+      { score: 7, drawProgress: 1 },
+      guidedInteraction(
+        70,
+        "external_game",
+        [
+          {
+            id: "risk_style",
+            type: "choice",
+            title: "选择扫雷人格",
+            description: "今天你准备怎么面对未知格子？",
+            required: true,
+            options: [
+              { id: "corner", label: "角落保守派", resultText: "从角落开始，安全感上线。" },
+              { id: "middle", label: "中路莽夫", resultText: "勇气可嘉，风险自理。" },
+              { id: "flagger", label: "标旗分析师", resultText: "每一面旗都像一份周报。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "完成安全点击",
+            description: "用占位小游戏模拟一次低风险决策。",
+            required: true,
+            gameCode: "safe_click",
+            requiredResult: "完成一次安全点击"
+          }
+        ],
+        ["扫雷训练结束，风险识别能力获得精神认证。"],
+        { title: "风险识别完成", copy: "你刚刚严肃地处理了一块虚拟雷区，现实问题先排队。" },
+        "风险小游戏"
+      )
+    ),
     cooldownSeconds: 60 * 60 * 4,
     dailyRewardLimit: 1
   },
@@ -361,7 +397,39 @@ const activities = [
     description: "脑子需要换个频道，哪怕只换五格。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 7, drawProgress: 1 },
+    rewardConfig: withInteraction(
+      { score: 7, drawProgress: 1 },
+      guidedInteraction(
+        60,
+        "external_game",
+        [
+          {
+            id: "first_guess",
+            type: "choice",
+            title: "选择开局气质",
+            description: "单词不重要，重要的是你看起来像在动脑。",
+            required: true,
+            options: [
+              { id: "vowels", label: "元音侦察", resultText: "先找元音，像个讲策略的人。" },
+              { id: "random", label: "灵感乱撞", resultText: "混沌也是一种算法。" },
+              { id: "safe", label: "常用词保底", resultText: "稳一点，生活已经够刺激了。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "完成字母选择",
+            description: "用占位小游戏完成一次脑内换台。",
+            required: true,
+            gameCode: "word_pick",
+            requiredResult: "完成一次字母选择"
+          }
+        ],
+        ["五格脑力活动完成，语言中枢短暂复活。"],
+        { title: "单词频道切换成功", copy: "工作脑暂时退后台，猜词脑上来透了口气。" },
+        "字谜小游戏"
+      )
+    ),
     cooldownSeconds: 60 * 60 * 4,
     dailyRewardLimit: 1
   },
@@ -437,7 +505,33 @@ const activities = [
     description: "让眼睛临时离开像素，也让灵魂离开需求文档。",
     category: ActivityCategory.rest,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 3 },
+    rewardConfig: withInteraction(
+      { score: 3 },
+      guidedInteraction(
+        65,
+        "none",
+        [
+          {
+            id: "pick_spot",
+            type: "ack",
+            title: "找一个远处目标",
+            description: "窗外、墙角、走廊尽头都行，重点是离屏幕远一点。",
+            required: true
+          },
+          {
+            id: "distance_timer",
+            type: "timer",
+            title: "看远 60 秒",
+            description: "让眼睛从像素井里爬出来，暂时不要分析任何需求。",
+            required: true,
+            durationSeconds: 60
+          }
+        ],
+        ["视线已成功越狱，屏幕暂时失去统治权。"],
+        { title: "眼睛离线成功", copy: "你刚刚把注意力投向远方，灵魂也顺便伸了个懒腰。" },
+        "护眼倒计时"
+      )
+    ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 3
   },
@@ -477,7 +571,38 @@ const activities = [
     description: "吸气，呼气，暂时不分析任何根因。",
     category: ActivityCategory.rest,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        45,
+        "none",
+        [
+          {
+            id: "breath_mode",
+            type: "choice",
+            title: "选择呼吸借口",
+            description: "给这次离线配一个听起来合理的名义。",
+            required: true,
+            options: [
+              { id: "latency", label: "降低脑延迟", resultText: "脑延迟优化开始。" },
+              { id: "cache", label: "清理情绪缓存", resultText: "缓存清理中。" },
+              { id: "reboot", label: "温柔重启", resultText: "重启不用关机。" }
+            ]
+          },
+          {
+            id: "breath_timer",
+            type: "timer",
+            title: "慢呼吸 30 秒",
+            description: "吸气，呼气，不顺手点开消息。",
+            required: true,
+            durationSeconds: 30
+          }
+        ],
+        ["呼吸流程完成，根因分析可以稍后再装作认真。"],
+        { title: "呼吸系统上线", copy: "你没有解决世界，但把自己从紧绷里捞回来了一点。" },
+        "慢呼吸"
+      )
+    ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
   },
@@ -527,7 +652,37 @@ const activities = [
     description: "不用写字，留白本身就是高级方案。",
     category: ActivityCategory.office_theater,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        35,
+        "none",
+        [
+          {
+            id: "notebook_pose",
+            type: "choice",
+            title: "选择沉思姿势",
+            description: "这是低风险表演，不需要真的产出方案。",
+            required: true,
+            options: [
+              { id: "blank", label: "盯着空白页", resultText: "留白代表可能性。" },
+              { id: "pen", label: "笔尖悬停", resultText: "像是下一秒就要写重点。" },
+              { id: "nod", label: "轻轻点头", resultText: "对不存在的方案表示认可。" }
+            ]
+          },
+          {
+            id: "perform",
+            type: "ack",
+            title: "完成 10 秒沉思",
+            description: "表情平静，动作轻微，不打扰任何人。",
+            required: true
+          }
+        ],
+        ["笔记本沉思完成，留白方案通过初审。"],
+        { title: "留白方案已形成", copy: "你没有写下任何字，但气场像是刚做完一次高层对齐。" },
+        "办公室表演"
+      )
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -547,7 +702,38 @@ const activities = [
     description: "任何图都可以，关键是看起来像在权衡架构。",
     category: ActivityCategory.office_theater,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        55,
+        "none",
+        [
+          {
+            id: "diagram_type",
+            type: "choice",
+            title: "选择图的精神用途",
+            description: "看起来像在做复杂判断就行。",
+            required: true,
+            options: [
+              { id: "system", label: "系统边界", resultText: "边界看起来很边界。" },
+              { id: "flow", label: "流程流向", resultText: "箭头都很有道理。" },
+              { id: "risk", label: "风险收敛", resultText: "风险暂时被凝视压住了。" }
+            ]
+          },
+          {
+            id: "stare_timer",
+            type: "timer",
+            title: "凝视 30 秒",
+            description: "眉头微皱，不要真的把自己绕进去。",
+            required: true,
+            durationSeconds: 30
+          }
+        ],
+        ["架构凝视完成，图纸感受到了尊重。"],
+        { title: "架构权衡结束", copy: "这张图已经被你严肃观察，短期内应该不会反抗。" },
+        "架构凝视"
+      )
+    ),
     cooldownSeconds: 60 * 90,
     dailyRewardLimit: 2
   },
@@ -613,7 +799,33 @@ const activities = [
     description: "以舒服为准，不需要证明柔韧性。",
     category: ActivityCategory.physical,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        40,
+        "none",
+        [
+          {
+            id: "comfort_check",
+            type: "ack",
+            title: "确认周围安全",
+            description: "站起来前看一下周围，别和椅子或桌角开战。",
+            required: true
+          },
+          {
+            id: "stretch_timer",
+            type: "timer",
+            title: "舒服伸展 30 秒",
+            description: "以舒服为准，不要强行表演柔韧性。",
+            required: true,
+            durationSeconds: 30
+          }
+        ],
+        ["伸展完成，椅子短暂失去控制权。"],
+        { title: "身体重新上线", copy: "你从工位形态恢复成人类形态，哪怕只有半分钟。" },
+        "身体重启"
+      )
+    ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
   },
@@ -623,7 +835,37 @@ const activities = [
     description: "一次极短的出走，路线安全即可。",
     category: ActivityCategory.physical,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 6, drawProgress: 1 },
+    rewardConfig: withInteraction(
+      { score: 6, drawProgress: 1 },
+      guidedInteraction(
+        50,
+        "optional_location",
+        [
+          {
+            id: "route",
+            type: "choice",
+            title: "选择出走路线",
+            description: "路线越短越好，安全第一，别把摸鱼整成探险。",
+            required: true,
+            options: [
+              { id: "door", label: "门口往返", resultText: "一次克制的出走。" },
+              { id: "water", label: "饮水点往返", resultText: "顺便补水，很像正事。" },
+              { id: "window", label: "窗边往返", resultText: "看一眼远方再回来。" }
+            ]
+          },
+          {
+            id: "return",
+            type: "ack",
+            title: "安全返回",
+            description: "回来后再点完成，路线不用上传，系统相信你这次。",
+            required: true
+          }
+        ],
+        ["极短出走结束，身体宣布它还拥有腿。"],
+        { title: "短途出走完成", copy: "你离开了工位，又体面地回来了，像一场微型冒险。" },
+        "短途移动"
+      )
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -665,7 +907,30 @@ const activities = [
     description: "仪式感到了，工作就像推进了。",
     category: ActivityCategory.imagination,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        25,
+        "none",
+        [
+          {
+            id: "file_name",
+            type: "choice",
+            title: "选择文件命名流派",
+            description: "不用真的动重要文件，脑内或草稿文件均可。",
+            required: true,
+            options: [
+              { id: "final", label: "final_v2", resultText: "经典永不过时。" },
+              { id: "real_final", label: "real_final", resultText: "听起来更接近交付。" },
+              { id: "dont_touch", label: "do_not_touch", resultText: "越警告越像重要资产。" }
+            ]
+          }
+        ],
+        ["命名仪式完成，项目推进感凭空增加。"],
+        { title: "命名仪式完成", copy: "一个名字改变不了项目，但能让你短暂拥有掌控感。" },
+        "脑洞选择"
+      )
+    ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
   },
@@ -726,7 +991,37 @@ const activities = [
     description: "主角必须是一件办公用品，结局可以开放。",
     category: ActivityCategory.imagination,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 6, drawProgress: 1 },
+    rewardConfig: withInteraction(
+      { score: 6, drawProgress: 1 },
+      guidedInteraction(
+        35,
+        "none",
+        [
+          {
+            id: "hero",
+            type: "choice",
+            title: "选择主角",
+            description: "办公用品也有命运，今天轮到谁上大银幕？",
+            required: true,
+            options: [
+              { id: "stapler", label: "订书机", resultText: "它把破碎的世界订在一起。" },
+              { id: "mug", label: "水杯", resultText: "它见证所有无声加班。" },
+              { id: "keyboard", label: "键盘", resultText: "它知道太多不该知道的快捷键。" }
+            ]
+          },
+          {
+            id: "ending",
+            type: "ack",
+            title: "给它一个结局",
+            description: "开放式、荒诞式、温柔式都行，20 秒内收工。",
+            required: true
+          }
+        ],
+        ["微型电影杀青，主演办公用品情绪稳定。"],
+        { title: "办公大片杀青", copy: "一部不存在的电影完成了，你也完成了一次合法脑洞漂移。" },
+        "脑洞编剧"
+      )
+    ),
     cooldownSeconds: 60 * 60 * 3,
     dailyRewardLimit: 1
   },
@@ -736,7 +1031,30 @@ const activities = [
     description: "可以是鼓励，也可以提醒不要再打开工作软件。",
     category: ActivityCategory.imagination,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        25,
+        "none",
+        [
+          {
+            id: "message_type",
+            type: "choice",
+            title: "选择留言语气",
+            description: "给未来的自己留一句不会增加负担的话。",
+            required: true,
+            options: [
+              { id: "kind", label: "温柔提醒", resultText: "未来的你收到一份轻轻的善意。" },
+              { id: "firm", label: "坚定下线", resultText: "未来的你被允许别再打开工作软件。" },
+              { id: "absurd", label: "荒诞祝福", resultText: "未来的你获得一枚精神护身符。" }
+            ]
+          }
+        ],
+        ["未来留言已投递，下班后的你可能会点头。"],
+        { title: "未来留言寄出", copy: "你给之后的自己递了一张小纸条，上面写着：别太用力。" },
+        "未来留言"
+      )
+    ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
   }
@@ -748,9 +1066,25 @@ async function main() {
       counts[activity.category] = (counts[activity.category] ?? 0) + 1;
       return counts;
     }, {});
+    const authoredInteractionCounts = activities.reduce<Record<string, number>>((counts, activity) => {
+      if (hasAuthoredInteraction(activity.rewardConfig)) {
+        counts[activity.category] = (counts[activity.category] ?? 0) + 1;
+      }
+      return counts;
+    }, {});
+    const authoredTotal = Object.values(authoredInteractionCounts).reduce(
+      (total, count) => total + count,
+      0
+    );
 
     if (activities.length < 30 || Object.values(categoryCounts).some((count) => count < 6)) {
       throw new Error("Activity seed must contain at least 30 templates and 6 per category");
+    }
+    if (
+      authoredTotal < Math.ceil(activities.length / 2) ||
+      Object.keys(categoryCounts).some((category) => (authoredInteractionCounts[category] ?? 0) < 3)
+    ) {
+      throw new Error("Activity seed must provide authored interactions for at least half of templates and 3 per category");
     }
 
     console.log(
@@ -764,7 +1098,9 @@ async function main() {
           cosmetics: cosmetics.length,
           achievements: achievements.length,
           activities: activities.length,
-          activityCategories: categoryCounts
+          activityCategories: categoryCounts,
+          authoredInteractionCategories: authoredInteractionCounts,
+          authoredInteractions: authoredTotal
         },
         null,
         2
@@ -804,6 +1140,15 @@ async function main() {
       update: activity
     });
   }
+}
+
+function hasAuthoredInteraction(value: unknown) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value as { interaction?: unknown }).interaction
+  );
 }
 
 main()

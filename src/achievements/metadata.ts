@@ -45,10 +45,14 @@ export type SerializedAchievementForRecommendation = {
   actionHint: AchievementActionHint;
 };
 
-export type AchievementRecommendations = Record<
-  AchievementRecommendationGroup,
-  SerializedAchievementForRecommendation[]
->;
+export type AchievementRecommendation = SerializedAchievementForRecommendation & {
+  recommendationGroup: AchievementRecommendationGroup;
+  recommendationReason: string;
+  remainingEffortLabel: string;
+  targetSection: AchievementActionHint["section"];
+};
+
+export type AchievementRecommendations = Record<AchievementRecommendationGroup, AchievementRecommendation[]>;
 
 type RuleConfigWithMeta = {
   meta?: Partial<AchievementMetadata>;
@@ -124,7 +128,11 @@ export function buildAchievementRecommendations(
     })
     .slice(0, 3);
 
-  return { nearest, today, long_term: longTerm };
+  return {
+    nearest: nearest.map((achievement) => withRecommendationContext(achievement, "nearest")),
+    today: today.map((achievement) => withRecommendationContext(achievement, "today")),
+    long_term: longTerm.map((achievement) => withRecommendationContext(achievement, "long_term"))
+  };
 }
 
 function toRuleConfig(value: Prisma.JsonValue): RuleConfigWithMeta {
@@ -216,6 +224,50 @@ function remainingEffort(progress: AchievementProgress): number {
     return progress.current > 0 ? Math.max(0, progress.current - progress.target) : 999;
   }
   return Math.max(0, progress.target - progress.current);
+}
+
+function withRecommendationContext(
+  achievement: SerializedAchievementForRecommendation,
+  group: AchievementRecommendationGroup
+): AchievementRecommendation {
+  return {
+    ...achievement,
+    recommendationGroup: group,
+    recommendationReason: recommendationReason(group, achievement),
+    remainingEffortLabel: remainingEffortLabel(achievement.progress),
+    targetSection: achievement.actionHint.section
+  };
+}
+
+function recommendationReason(
+  group: AchievementRecommendationGroup,
+  achievement: SerializedAchievementForRecommendation
+): string {
+  if (group === "nearest") {
+    return achievement.progress.percent >= 80
+      ? "已经快摸到边了，顺手补一下就能解锁。"
+      : "这是当前进度最接近完成的目标之一。";
+  }
+  if (group === "today") {
+    return "今天的常规摸鱼动作就能推进它，不用额外折腾。";
+  }
+  return "适合慢慢追，不错过、不补课，也没有付费恢复。";
+}
+
+function remainingEffortLabel(progress: AchievementProgress): string {
+  if (progress.completed) {
+    return "已经完成";
+  }
+  if (progress.unit === "rank") {
+    return progress.current > 0
+      ? `还差 ${Math.max(0, progress.current - progress.target)} 名进入目标`
+      : `进入前 ${progress.target} 即可`;
+  }
+  const remaining = Math.max(0, progress.target - progress.current);
+  if (progress.unit === "minutes") {
+    return `还差 ${remaining} 分钟`;
+  }
+  return `还差 ${remaining} 次`;
 }
 
 function rarityRank(rarity: AchievementMetadata["rarity"]): number {
