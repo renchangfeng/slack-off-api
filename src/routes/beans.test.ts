@@ -53,6 +53,9 @@ describe("bean routes", () => {
     expect(response.json().data).toMatchObject({
       duplicate: false,
       remainingDrawChances: 0,
+      resultTitle: "新豆入仓",
+      resultCopy: expect.stringContaining("第一次加入豆仓"),
+      nextHint: expect.stringContaining("机会用完了"),
       bean: {
         id: beanId,
         rarity: BeanRarity.common,
@@ -131,6 +134,19 @@ describe("bean routes", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().data).toMatchObject({
       drawChances: 1,
+      summary: {
+        collected: 0,
+        total: 1,
+        percent: 0,
+        nextAction: expect.any(String)
+      },
+      nextTarget: {
+        id: beanId,
+        name: "马桶计时豆",
+        rarity: BeanRarity.common,
+        theme: BeanTheme.restroom,
+        hint: expect.stringContaining("马桶计时豆")
+      },
       beans: [
         {
           id: beanId,

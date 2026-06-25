@@ -161,7 +161,15 @@ export async function registerSocialRoutes(server: FastifyInstance) {
         );
       }
       const counts = await reactionCounts(server, body.recipientUserId);
-      return ok({ created, reactionType: body.reactionType, counts, remainingToday: Math.max(0, dailyReactionLimit - sentToday - (created ? 1 : 0)) });
+      const remainingToday = Math.max(0, dailyReactionLimit - sentToday - (created ? 1 : 0));
+      return ok({
+        created,
+        reactionType: body.reactionType,
+        counts,
+        remainingToday,
+        resultTitle: reactionResultTitle(body.reactionType, created),
+        resultCopy: reactionResultCopy(body.reactionType, created, remainingToday)
+      });
     }
   );
 }
@@ -279,6 +287,10 @@ function registerGroupRoutes(server: FastifyInstance, kind: "squad" | "company")
 }
 
 async function socialSummary(server: FastifyInstance, userId: string) {
+  const reactionDate = utcDate(new Date());
+  const sentToday = await server.prisma.socialReaction.count({
+    where: { senderId: userId, reactionDate }
+  });
   const user = await server.prisma.user.update({
     where: { id: userId },
     data: { friendCode: (await server.prisma.user.findUnique({ where: { id: userId }, select: { friendCode: true } }))?.friendCode ?? makeCode() },
@@ -313,8 +325,30 @@ async function socialSummary(server: FastifyInstance, userId: string) {
           memberCount: user.companyMembership.company._count.memberships
         }
       : null,
-    reactions: { dailyLimit: dailyReactionLimit, resetTimezone: "UTC" }
+    reactions: {
+      dailyLimit: dailyReactionLimit,
+      sentToday,
+      remainingToday: Math.max(0, dailyReactionLimit - sentToday),
+      resetTimezone: "UTC"
+    }
   };
+}
+
+function reactionResultTitle(reactionType: SocialReactionType, created: boolean): string {
+  if (!created) return "今天已经送过了";
+  return reactionType === SocialReactionType.tissue ? "纸已递到" : "赞已送达";
+}
+
+function reactionResultCopy(
+  reactionType: SocialReactionType,
+  created: boolean,
+  remainingToday: number
+): string {
+  if (!created) {
+    return "这份心意今天已经记上了，不重复刷屏。";
+  }
+  const action = reactionType === SocialReactionType.tissue ? "递纸" : "点赞";
+  return `${action}成功，今天还可以送 ${remainingToday} 次固定善意。`;
 }
 
 async function currentMembership(server: FastifyInstance, kind: "squad" | "company", userId: string) {

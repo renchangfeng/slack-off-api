@@ -51,6 +51,9 @@ export async function registerBeanRoutes(server: FastifyInstance) {
       ]);
       const serialized = beans.map(serializeBean);
       const ownedCodes = new Set(serialized.filter((bean) => bean.owned).map((bean) => bean.code));
+      const collectedCount = serialized.filter((bean) => bean.owned).length;
+      const totalCount = serialized.length;
+      const nextTarget = findNextBeanTarget(serialized);
 
       return ok({
         drawChances: stats?.drawChances ?? 0,
@@ -59,6 +62,16 @@ export async function registerBeanRoutes(server: FastifyInstance) {
         fragmentExchangeCost: FRAGMENTS_PER_DRAW,
         pityCount: stats?.beanPityCount ?? 0,
         pityThreshold: BEAN_PITY_THRESHOLD,
+        summary: {
+          collected: collectedCount,
+          total: totalCount,
+          percent: totalCount > 0 ? Math.floor((collectedCount / totalCount) * 100) : 0,
+          nextAction:
+            nextTarget === null
+              ? "图鉴已经全亮，可以把喜欢的豆摆进展示柜。"
+              : "继续完成打卡、活动或目标奖励，攒机会抽下一颗命运豆。"
+        },
+        nextTarget,
         beans: serialized,
         themes: Object.values(BeanTheme).map((theme) => {
           const themed = serialized.filter((bean) => bean.theme === theme);
@@ -248,6 +261,21 @@ export async function registerBeanRoutes(server: FastifyInstance) {
         pityTriggered: selection.pityTriggered,
         pityCount: selection.nextPityCount,
         remainingDrawChances: result.remainingDrawChances,
+        resultTitle: drawResultTitle({
+          duplicate: result.duplicate,
+          pityTriggered: selection.pityTriggered,
+          rarity: selected.rarity
+        }),
+        resultCopy: drawResultCopy({
+          beanName: selected.name,
+          duplicate: result.duplicate,
+          fragmentsGranted: result.fragmentsGranted,
+          pityTriggered: selection.pityTriggered
+        }),
+        nextHint:
+          result.remainingDrawChances > 0
+            ? `还剩 ${result.remainingDrawChances} 次机会，可以继续抽。`
+            : "机会用完了，去完成打卡、活动或目标奖励继续攒。",
         achievementsUnlocked
       });
     }
@@ -348,4 +376,63 @@ function serializeBean(bean: BeanWithQuantity) {
     quantity,
     owned: quantity > 0
   };
+}
+
+function findNextBeanTarget(beans: ReturnType<typeof serializeBean>[]) {
+  const missing = beans
+    .filter((bean) => !bean.owned)
+    .sort((left, right) => {
+      const byTheme = left.theme.localeCompare(right.theme);
+      if (byTheme !== 0) return byTheme;
+      const byRarity = rarityRank(left.rarity) - rarityRank(right.rarity);
+      if (byRarity !== 0) return byRarity;
+      return left.name.localeCompare(right.name);
+    })[0];
+  if (!missing) return null;
+  return {
+    id: missing.id,
+    code: missing.code,
+    name: missing.name,
+    rarity: missing.rarity,
+    theme: missing.theme,
+    hint: `下一颗可以追 ${missing.name}，来自${themeLabel(missing.theme)}。`
+  };
+}
+
+function drawResultTitle(input: {
+  duplicate: boolean;
+  pityTriggered: boolean;
+  rarity: BeanDefinition["rarity"];
+}): string {
+  if (input.pityTriggered) return "保底豆落袋";
+  if (input.duplicate) return "重复豆变碎片";
+  if (["epic", "legendary"].includes(input.rarity)) return "高光豆入仓";
+  return "新豆入仓";
+}
+
+function drawResultCopy(input: {
+  beanName: string;
+  duplicate: boolean;
+  fragmentsGranted: number;
+  pityTriggered: boolean;
+}): string {
+  if (input.duplicate) {
+    return `${input.beanName} 已经在仓里了，这次转化为数量 +1 和 ${input.fragmentsGranted} 个碎片。`;
+  }
+  if (input.pityTriggered) {
+    return `${input.beanName} 被保底机制请了出来，图鉴又亮了一格。`;
+  }
+  return `${input.beanName} 第一次加入豆仓，图鉴完成度已更新。`;
+}
+
+function rarityRank(rarity: BeanDefinition["rarity"]): number {
+  return { common: 1, uncommon: 2, rare: 3, epic: 4, legendary: 5 }[rarity];
+}
+
+function themeLabel(theme: BeanTheme): string {
+  return {
+    office: "工位卡池",
+    restroom: "隔间卡池",
+    daydream: "白日梦卡池"
+  }[theme];
 }

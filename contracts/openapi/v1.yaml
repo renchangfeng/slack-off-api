@@ -213,10 +213,33 @@ components:
             memberCount: { type: integer }
         reactions:
           type: object
-          required: [dailyLimit, resetTimezone]
+          required: [dailyLimit, sentToday, remainingToday, resetTimezone]
           properties:
             dailyLimit: { type: integer }
+            sentToday: { type: integer }
+            remainingToday: { type: integer }
             resetTimezone: { type: string }
+    SocialReactionResult:
+      type: object
+      required: [created, reactionType, counts, remainingToday, resultTitle, resultCopy]
+      properties:
+        created:
+          type: boolean
+        reactionType:
+          type: string
+          enum: [tissue, like]
+        counts:
+          type: object
+          required: [tissue, like]
+          properties:
+            tissue: { type: integer }
+            like: { type: integer }
+        remainingToday:
+          type: integer
+        resultTitle:
+          type: string
+        resultCopy:
+          type: string
     ProgressionGoal:
       type: object
       required: [code, title, description, current, target, unit, completed]
@@ -442,7 +465,7 @@ components:
           type: boolean
     BeanCollection:
       type: object
-      required: [drawChances, drawProgress, fragments, fragmentExchangeCost, pityCount, pityThreshold, beans, themes, combinations, showcase]
+      required: [drawChances, drawProgress, fragments, fragmentExchangeCost, pityCount, pityThreshold, summary, nextTarget, beans, themes, combinations, showcase]
       properties:
         drawChances:
           type: integer
@@ -456,6 +479,41 @@ components:
           type: integer
         pityThreshold:
           type: integer
+        summary:
+          type: object
+          required: [collected, total, percent, nextAction]
+          properties:
+            collected:
+              type: integer
+            total:
+              type: integer
+            percent:
+              type: integer
+              minimum: 0
+              maximum: 100
+            nextAction:
+              type: string
+        nextTarget:
+          oneOf:
+            - type: object
+              required: [id, code, name, rarity, theme, hint]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                code:
+                  type: string
+                name:
+                  type: string
+                rarity:
+                  type: string
+                  enum: [common, uncommon, rare, epic, legendary]
+                theme:
+                  type: string
+                  enum: [office, restroom, daydream]
+                hint:
+                  type: string
+            - type: "null"
         beans:
           type: array
           items:
@@ -501,7 +559,7 @@ components:
                 $ref: "#/components/schemas/Bean"
     BeanDrawResult:
       type: object
-      required: [bean, duplicate, fragmentsGranted, pityTriggered, pityCount, remainingDrawChances]
+      required: [bean, duplicate, fragmentsGranted, pityTriggered, pityCount, remainingDrawChances, resultTitle, resultCopy, nextHint]
       properties:
         bean:
           $ref: "#/components/schemas/Bean"
@@ -515,6 +573,12 @@ components:
           type: integer
         remainingDrawChances:
           type: integer
+        resultTitle:
+          type: string
+        resultCopy:
+          type: string
+        nextHint:
+          type: string
         achievementsUnlocked:
           type: array
           items:
@@ -1189,6 +1253,16 @@ paths:
       responses:
         "200":
           description: Reaction result and aggregate counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/SocialReactionResult"
+                  error:
+                    type: "null"
   /v1/progression/summary:
     get:
       security:
