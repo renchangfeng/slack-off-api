@@ -547,7 +547,7 @@ components:
               type: [string, "null"]
     Achievement:
       type: object
-      required: [id, code, name, description, ruleType, rewardConfig, progress, unlockedAt, rewardClaimedAt]
+      required: [id, code, name, description, ruleType, rewardConfig, progress, category, rarity, unlockSummary, recommendationWeight, todayFriendly, actionHint, unlockedAt, rewardClaimedAt]
       properties:
         id:
           type: string
@@ -583,23 +583,62 @@ components:
               maximum: 100
             completed:
               type: boolean
+        category:
+          type: string
+          enum: [new_user, check_in, activity, bean_draw, leaderboard, social]
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+        unlockSummary:
+          type: string
+        recommendationWeight:
+          type: integer
+        todayFriendly:
+          type: boolean
+        actionHint:
+          type: object
+          required: [section, label]
+          properties:
+            section:
+              type: string
+              enum: [home, activities, beans, leaderboards, profile]
+            label:
+              type: string
         unlockedAt:
           type: [string, "null"]
           format: date-time
         rewardClaimedAt:
           type: [string, "null"]
           format: date-time
+    AchievementRecommendations:
+      type: object
+      required: [nearest, today, long_term]
+      properties:
+        nearest:
+          type: array
+          items:
+            $ref: "#/components/schemas/Achievement"
+        today:
+          type: array
+          items:
+            $ref: "#/components/schemas/Achievement"
+        long_term:
+          type: array
+          items:
+            $ref: "#/components/schemas/Achievement"
     AchievementList:
       type: object
-      required: [achievements]
+      required: [achievements, recommendations]
       properties:
         achievements:
           type: array
           items:
             $ref: "#/components/schemas/Achievement"
+        recommendations:
+          $ref: "#/components/schemas/AchievementRecommendations"
     Cosmetic:
       type: object
-      required: [id, code, name, description, cosmeticType, rarity]
+      required: [id, code, name, description, cosmeticType, rarity, unlockSummary]
       properties:
         id:
           type: string
@@ -616,14 +655,18 @@ components:
         rarity:
           type: string
           enum: [common, uncommon, rare, epic, legendary]
+        unlockSummary:
+          type: string
     OwnedCosmetic:
       allOf:
         - $ref: "#/components/schemas/Cosmetic"
         - type: object
-          required: [unlockedAt, equipped]
+          required: [owned, unlockedAt, equipped]
           properties:
+            owned:
+              type: boolean
             unlockedAt:
-              type: string
+              type: [string, "null"]
               format: date-time
             equipped:
               type: boolean

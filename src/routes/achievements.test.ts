@@ -52,6 +52,14 @@ describe("achievement and cosmetic flows", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().data.achievements[0]).toMatchObject({
       code: "first_paid_pooping",
+      category: "new_user",
+      rarity: "common",
+      unlockSummary: "完成第一次有效打卡",
+      todayFriendly: true,
+      actionHint: {
+        section: "home",
+        label: "去打卡"
+      },
       progress: {
         current: 1,
         target: 1,
@@ -59,6 +67,48 @@ describe("achievement and cosmetic flows", () => {
         percent: 100,
         completed: true
       }
+    });
+    expect(response.json().data.recommendations).toMatchObject({
+      nearest: [],
+      today: [],
+      long_term: []
+    });
+
+    await server.close();
+  });
+
+  it("returns locked and owned cosmetics with unlock summaries", async () => {
+    const store = createStore();
+    const server = await buildTestServer(store);
+    const locked = await server.inject({
+      method: "GET",
+      url: "/v1/cosmetics",
+      headers: { authorization: "Bearer test" }
+    });
+
+    store.userCosmetics.push({
+      userId,
+      cosmeticId,
+      unlockedAt: new Date("2026-06-11T00:00:00.000Z"),
+      sourceType: RewardSourceType.achievement
+    });
+    const owned = await server.inject({
+      method: "GET",
+      url: "/v1/cosmetics",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(locked.json().data.cosmetics[0]).toMatchObject({
+      code: "badge_paid_pooper",
+      owned: false,
+      equipped: false,
+      unlockedAt: null,
+      unlockSummary: "完成第一次有效打卡"
+    });
+    expect(owned.json().data.cosmetics[0]).toMatchObject({
+      code: "badge_paid_pooper",
+      owned: true,
+      unlockedAt: "2026-06-11T00:00:00.000Z"
     });
 
     await server.close();
@@ -183,7 +233,17 @@ function createStore() {
     name: "第一次带薪坚持",
     description: "完成第一次打卡，恭喜你开始认真休息。",
     ruleType: AchievementRuleType.first_checkin,
-    ruleConfig: { count: 1 },
+    ruleConfig: {
+      count: 1,
+      meta: {
+        category: "new_user",
+        rarity: "common",
+        weight: 100,
+        todayFriendly: true,
+        unlockSummary: "完成第一次有效打卡",
+        actionHint: { section: "home", label: "去打卡" }
+      }
+    },
     rewardConfig: { score: 10, cosmeticCode: "badge_paid_pooper" },
     active: true
   };
@@ -285,7 +345,8 @@ function createPrismaMock(store: TestStore) {
     },
     cosmetic: {
       findUnique: async ({ where }: { where: { code?: string; id?: string } }) =>
-        where.code === store.cosmetic.code || where.id === store.cosmetic.id ? store.cosmetic : null
+        where.code === store.cosmetic.code || where.id === store.cosmetic.id ? store.cosmetic : null,
+      findMany: async () => [store.cosmetic]
     },
     userCosmetic: {
       findMany: async ({ where }: { where: { userId: string } }) =>

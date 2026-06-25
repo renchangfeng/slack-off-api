@@ -1,6 +1,11 @@
 import { ActivityAssignmentStatus, CosmeticType } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { getWeeklyRank } from "../achievements/evaluator.js";
+import {
+  buildAchievementRecommendations,
+  readAchievementMetadata,
+  type SerializedAchievementForRecommendation
+} from "../achievements/metadata.js";
 import { calculateAchievementProgress } from "../achievements/progress.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { fail, ok } from "../http/envelope.js";
@@ -49,26 +54,41 @@ export async function registerAchievementRoutes(server: FastifyInstance) {
         completedActivityCount,
         weeklyRank
       };
+      const serializedAchievements = achievements.map((achievement) => {
+        const progress = calculateAchievementProgress(
+          achievement.ruleType,
+          achievement.ruleConfig,
+          progressInput
+        );
+        const metadata = readAchievementMetadata({
+          code: achievement.code,
+          ruleType: achievement.ruleType,
+          ruleConfig: achievement.ruleConfig
+        });
+        return {
+          id: achievement.id,
+          code: achievement.code,
+          name: achievement.name,
+          description: achievement.description,
+          ruleType: achievement.ruleType,
+          rewardConfig: achievement.rewardConfig,
+          progress,
+          category: metadata.category,
+          rarity: metadata.rarity,
+          unlockSummary: metadata.unlockSummary,
+          recommendationWeight: metadata.weight,
+          todayFriendly: metadata.todayFriendly,
+          actionHint: metadata.actionHint,
+          unlockedAt: achievement.users[0]?.unlockedAt.toISOString() ?? null,
+          rewardClaimedAt: achievement.users[0]?.rewardClaimedAt?.toISOString() ?? null
+        };
+      });
 
       return ok({
-        achievements: achievements.map((achievement) => {
-          const progress = calculateAchievementProgress(
-            achievement.ruleType,
-            achievement.ruleConfig,
-            progressInput
-          );
-          return {
-            id: achievement.id,
-            code: achievement.code,
-            name: achievement.name,
-            description: achievement.description,
-            ruleType: achievement.ruleType,
-            rewardConfig: achievement.rewardConfig,
-            progress,
-            unlockedAt: achievement.users[0]?.unlockedAt.toISOString() ?? null,
-            rewardClaimedAt: achievement.users[0]?.rewardClaimedAt?.toISOString() ?? null
-          };
-        })
+        achievements: serializedAchievements,
+        recommendations: buildAchievementRecommendations(
+          serializedAchievements as SerializedAchievementForRecommendation[]
+        )
       });
     }
   );
@@ -80,7 +100,7 @@ export async function registerAchievementRoutes(server: FastifyInstance) {
       preHandler: [server.requireAuth]
     },
     async (request) => {
-      const [owned, profile] = await Promise.all([
+      const [owned, profile, allCosmetics, achievements] = await Promise.all([
         server.prisma.userCosmetic.findMany({
           where: { userId: request.user!.id },
           orderBy: { unlockedAt: "desc" },
@@ -92,19 +112,36 @@ export async function registerAchievementRoutes(server: FastifyInstance) {
             equippedBadge: true,
             equippedTitle: true
           }
+        }),
+        server.prisma.cosmetic.findMany({
+          where: { active: true },
+          orderBy: [{ rarity: "asc" }, { name: "asc" }]
+        }),
+        server.prisma.achievement.findMany({
+          where: { active: true }
         })
       ]);
+      const ownedByCosmeticId = new Map(owned.map((item) => [item.cosmeticId, item]));
+      const unlockSummaries = buildCosmeticUnlockSummaries(achievements);
 
       return ok({
-        equippedBadge: profile?.equippedBadge ? serializeCosmetic(profile.equippedBadge) : null,
-        equippedTitle: profile?.equippedTitle ? serializeCosmetic(profile.equippedTitle) : null,
-        cosmetics: owned.map((item) => ({
-          ...serializeCosmetic(item.cosmetic),
-          unlockedAt: item.unlockedAt.toISOString(),
-          equipped:
-            item.cosmeticId === profile?.equippedBadgeId ||
-            item.cosmeticId === profile?.equippedTitleId
-        }))
+        equippedBadge: profile?.equippedBadge
+          ? serializeCosmetic(profile.equippedBadge, unlockSummaries.get(profile.equippedBadge.code))
+          : null,
+        equippedTitle: profile?.equippedTitle
+          ? serializeCosmetic(profile.equippedTitle, unlockSummaries.get(profile.equippedTitle.code))
+          : null,
+        cosmetics: allCosmetics.map((cosmetic) => {
+          const ownedItem = ownedByCosmeticId.get(cosmetic.id);
+          return {
+            ...serializeCosmetic(cosmetic, unlockSummaries.get(cosmetic.code)),
+            owned: Boolean(ownedItem),
+            unlockedAt: ownedItem?.unlockedAt.toISOString() ?? null,
+            equipped:
+              cosmetic.id === profile?.equippedBadgeId ||
+              cosmetic.id === profile?.equippedTitleId
+          };
+        })
       });
     }
   );
@@ -176,6 +213,38 @@ export async function registerAchievementRoutes(server: FastifyInstance) {
   );
 }
 
+function buildCosmeticUnlockSummaries(
+  achievements: Array<{
+    ruleType: Parameters<typeof readAchievementMetadata>[0]["ruleType"];
+    ruleConfig: Parameters<typeof readAchievementMetadata>[0]["ruleConfig"];
+    rewardConfig: unknown;
+    code: string;
+  }>
+) {
+  const summaries = new Map<string, string>();
+  for (const achievement of achievements) {
+    const cosmeticCode = readRewardCosmeticCode(achievement.rewardConfig);
+    if (!cosmeticCode) {
+      continue;
+    }
+    const metadata = readAchievementMetadata({
+      code: achievement.code,
+      ruleType: achievement.ruleType,
+      ruleConfig: achievement.ruleConfig
+    });
+    summaries.set(cosmeticCode, metadata.unlockSummary);
+  }
+  return summaries;
+}
+
+function readRewardCosmeticCode(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const cosmeticCode = (value as { cosmeticCode?: unknown }).cosmeticCode;
+  return typeof cosmeticCode === "string" ? cosmeticCode : null;
+}
+
 function serializeCosmetic(cosmetic: {
   id: string;
   code: string;
@@ -183,13 +252,14 @@ function serializeCosmetic(cosmetic: {
   description: string;
   cosmeticType: CosmeticType;
   rarity: string;
-}) {
+}, unlockSummary?: string) {
   return {
     id: cosmetic.id,
     code: cosmetic.code,
     name: cosmetic.name,
     description: cosmetic.description,
     cosmeticType: cosmetic.cosmeticType,
-    rarity: cosmetic.rarity
+    rarity: cosmetic.rarity,
+    unlockSummary: unlockSummary ?? "完成对应成就后解锁"
   };
 }

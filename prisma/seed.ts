@@ -173,7 +173,17 @@ const achievements = [
     name: "第一次带薪坚持",
     description: "完成第一次打卡，恭喜你开始认真休息。",
     ruleType: AchievementRuleType.first_checkin,
-    ruleConfig: { count: 1 },
+    ruleConfig: {
+      count: 1,
+      meta: {
+        category: "new_user",
+        rarity: "common",
+        weight: 100,
+        todayFriendly: true,
+        unlockSummary: "完成第一次有效打卡",
+        actionHint: { section: "home", label: "去打卡" }
+      }
+    },
     rewardConfig: { score: 10, drawProgress: 1, cosmeticCode: "badge_paid_pooper" }
   },
   {
@@ -181,7 +191,17 @@ const achievements = [
     name: "三日不卷",
     description: "连续三天记得给自己一点空隙。",
     ruleType: AchievementRuleType.streak,
-    ruleConfig: { days: 3 },
+    ruleConfig: {
+      days: 3,
+      meta: {
+        category: "check_in",
+        rarity: "rare",
+        weight: 70,
+        todayFriendly: false,
+        unlockSummary: "连续 3 天完成有效休息",
+        actionHint: { section: "home", label: "继续打卡" }
+      }
+    },
     rewardConfig: { score: 30, drawChance: 1, cosmeticCode: "title_workplace_philosopher" }
   },
   {
@@ -189,7 +209,17 @@ const achievements = [
     name: "半小时人生赢家",
     description: "累计 30 分钟有效休息，说明你已经掌握了工位呼吸法。",
     ruleType: AchievementRuleType.total_duration,
-    ruleConfig: { minutes: 30 },
+    ruleConfig: {
+      minutes: 30,
+      meta: {
+        category: "check_in",
+        rarity: "uncommon",
+        weight: 75,
+        todayFriendly: true,
+        unlockSummary: "累计 30 分钟有效休息",
+        actionHint: { section: "home", label: "开始休息" }
+      }
+    },
     rewardConfig: { score: 20, drawProgress: 1 }
   },
   {
@@ -197,7 +227,17 @@ const achievements = [
     name: "拼豆入门",
     description: "收集 3 种不同的工位命运豆。",
     ruleType: AchievementRuleType.collection_count,
-    ruleConfig: { count: 3 },
+    ruleConfig: {
+      count: 3,
+      meta: {
+        category: "bean_draw",
+        rarity: "rare",
+        weight: 65,
+        todayFriendly: true,
+        unlockSummary: "收集 3 种不同命运豆",
+        actionHint: { section: "beans", label: "去抽豆" }
+      }
+    },
     rewardConfig: { score: 25, drawChance: 1 }
   },
   {
@@ -205,7 +245,17 @@ const achievements = [
     name: "摸鱼大王",
     description: "进入周榜前 10，短暂地向世界证明你很会休息。",
     ruleType: AchievementRuleType.weekly_top_rank,
-    ruleConfig: { rank: 10 },
+    ruleConfig: {
+      rank: 10,
+      meta: {
+        category: "leaderboard",
+        rarity: "legendary",
+        weight: 40,
+        todayFriendly: false,
+        unlockSummary: "进入周榜前 10",
+        actionHint: { section: "leaderboards", label: "冲一下榜" }
+      }
+    },
     rewardConfig: { score: 50, cosmeticCode: "badge_slack_king" }
   },
   {
@@ -213,7 +263,17 @@ const achievements = [
     name: "摸鱼试吃员",
     description: "完成 5 个随机摸鱼活动。",
     ruleType: AchievementRuleType.activity_count,
-    ruleConfig: { count: 5 },
+    ruleConfig: {
+      count: 5,
+      meta: {
+        category: "activity",
+        rarity: "uncommon",
+        weight: 85,
+        todayFriendly: true,
+        unlockSummary: "完成 5 个摸鱼活动",
+        actionHint: { section: "activities", label: "去做活动" }
+      }
+    },
     rewardConfig: { score: 50 }
   }
 ];
