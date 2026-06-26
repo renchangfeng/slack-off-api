@@ -288,6 +288,24 @@ function withInteraction(
   };
 }
 
+function withPresentation(
+  rewardConfig: Prisma.InputJsonObject,
+  presentation: Prisma.InputJsonObject
+) {
+  return {
+    ...rewardConfig,
+    presentation
+  };
+}
+
+function presentationForActivity(code: string) {
+  const presentation = activityPresentations[code];
+  if (!presentation) {
+    throw new Error(`Missing activity presentation for ${code}`);
+  }
+  return presentation;
+}
+
 function guidedInteraction(
   estimatedSeconds: number,
   proofPolicy: string,
@@ -307,7 +325,7 @@ function guidedInteraction(
   };
 }
 
-const activities = [
+const rawActivities = [
   // Mini-games
   {
     code: "match_three_rounds",
@@ -343,7 +361,10 @@ const activities = [
             requiredResult: "完成 5 次有效点击"
           }
         ],
-        ["消消乐训练结束，大脑成功假装换了一块显卡。"]
+        [
+          "消消乐训练结束，大脑成功假装换了一块显卡。",
+          "三关小混乱已被你体面消除，手指申请短暂表扬。"
+        ]
       )
     ),
     cooldownSeconds: 60 * 60 * 6,
@@ -383,7 +404,10 @@ const activities = [
             requiredResult: "完成一次安全点击"
           }
         ],
-        ["扫雷训练结束，风险识别能力获得精神认证。"],
+        [
+          "扫雷训练结束，风险识别能力获得精神认证。",
+          "你在虚拟雷区里保持了基本体面，现实风险先别过来。"
+        ],
         { title: "风险识别完成", copy: "你刚刚严肃地处理了一块虚拟雷区，现实问题先排队。" },
         "风险小游戏"
       )
@@ -425,7 +449,10 @@ const activities = [
             requiredResult: "完成一次字母选择"
           }
         ],
-        ["五格脑力活动完成，语言中枢短暂复活。"],
+        [
+          "五格脑力活动完成，语言中枢短暂复活。",
+          "单词频道切换成功，工作脑获得一分钟后台休眠。"
+        ],
         { title: "单词频道切换成功", copy: "工作脑暂时退后台，猜词脑上来透了口气。" },
         "字谜小游戏"
       )
@@ -493,7 +520,10 @@ const activities = [
             durationSeconds: 30
           }
         ],
-        ["水杯已被充分研究，世界暂时没有变坏。"]
+        [
+          "水杯已被充分研究，世界暂时没有变坏。",
+          "液体动力学观察结束，你和水杯达成短暂共识。"
+        ]
       )
     ),
     cooldownSeconds: 60 * 30,
@@ -527,7 +557,10 @@ const activities = [
             durationSeconds: 60
           }
         ],
-        ["视线已成功越狱，屏幕暂时失去统治权。"],
+        [
+          "视线已成功越狱，屏幕暂时失去统治权。",
+          "远方接住了你的注意力，像素世界安静了 60 秒。"
+        ],
         { title: "眼睛离线成功", copy: "你刚刚把注意力投向远方，灵魂也顺便伸了个懒腰。" },
         "护眼倒计时"
       )
@@ -598,7 +631,10 @@ const activities = [
             durationSeconds: 30
           }
         ],
-        ["呼吸流程完成，根因分析可以稍后再装作认真。"],
+        [
+          "呼吸流程完成，根因分析可以稍后再装作认真。",
+          "情绪缓存清理完毕，系统建议先别立刻加载压力。"
+        ],
         { title: "呼吸系统上线", copy: "你没有解决世界，但把自己从紧绷里捞回来了一点。" },
         "慢呼吸"
       )
@@ -640,7 +676,10 @@ const activities = [
             required: true
           }
         ],
-        ["加载中表情验收通过，空气认为你很忙。"]
+        [
+          "加载中表情验收通过，空气认为你很忙。",
+          "表情进度条已走完，复杂问题暂时被你的眉头镇住。"
+        ]
       )
     ),
     cooldownSeconds: 60 * 60,
@@ -678,7 +717,10 @@ const activities = [
             required: true
           }
         ],
-        ["笔记本沉思完成，留白方案通过初审。"],
+        [
+          "笔记本沉思完成，留白方案通过初审。",
+          "空白页没有产出，但它成功承载了你的高级感。"
+        ],
         { title: "留白方案已形成", copy: "你没有写下任何字，但气场像是刚做完一次高层对齐。" },
         "办公室表演"
       )
@@ -729,7 +771,10 @@ const activities = [
             durationSeconds: 30
           }
         ],
-        ["架构凝视完成，图纸感受到了尊重。"],
+        [
+          "架构凝视完成，图纸感受到了尊重。",
+          "你认真看过了那张图，它现在应该会收敛一点。"
+        ],
         { title: "架构权衡结束", copy: "这张图已经被你严肃观察，短期内应该不会反抗。" },
         "架构凝视"
       )
@@ -787,7 +832,10 @@ const activities = [
             durationSeconds: 20
           }
         ],
-        ["肩膀从待机模式回来了，工位气氛稍微松了一点。"]
+        [
+          "肩膀从待机模式回来了，工位气氛稍微松了一点。",
+          "肩部完成一次低调上线，没有触发任何会议。"
+        ]
       )
     ),
     cooldownSeconds: 60 * 45,
@@ -821,7 +869,10 @@ const activities = [
             durationSeconds: 30
           }
         ],
-        ["伸展完成，椅子短暂失去控制权。"],
+        [
+          "伸展完成，椅子短暂失去控制权。",
+          "你从工位形态恢复成人类形态，虽然只有半分钟也算。"
+        ],
         { title: "身体重新上线", copy: "你从工位形态恢复成人类形态，哪怕只有半分钟。" },
         "身体重启"
       )
@@ -861,7 +912,10 @@ const activities = [
             required: true
           }
         ],
-        ["极短出走结束，身体宣布它还拥有腿。"],
+        [
+          "极短出走结束，身体宣布它还拥有腿。",
+          "一次克制的离岗闭环完成，路线短但尊严完整。"
+        ],
         { title: "短途出走完成", copy: "你离开了工位，又体面地回来了，像一场微型冒险。" },
         "短途移动"
       )
@@ -926,7 +980,10 @@ const activities = [
             ]
           }
         ],
-        ["命名仪式完成，项目推进感凭空增加。"],
+        [
+          "命名仪式完成，项目推进感凭空增加。",
+          "文件名获得新身份，项目进度条在精神层面动了一下。"
+        ],
         { title: "命名仪式完成", copy: "一个名字改变不了项目，但能让你短暂拥有掌控感。" },
         "脑洞选择"
       )
@@ -959,7 +1016,10 @@ const activities = [
             ]
           }
         ],
-        ["荒诞职称已生成，你现在拥有一份不会加班的头衔。"]
+        [
+          "荒诞职称已生成，你现在拥有一份不会加班的头衔。",
+          "新头衔已授予，权限包括短暂开心和拒绝过度严肃。"
+        ]
       )
     ),
     cooldownSeconds: 60 * 60 * 2,
@@ -1017,7 +1077,10 @@ const activities = [
             required: true
           }
         ],
-        ["微型电影杀青，主演办公用品情绪稳定。"],
+        [
+          "微型电影杀青，主演办公用品情绪稳定。",
+          "办公用品完成主角任务，你完成了一次脑内放映。"
+        ],
         { title: "办公大片杀青", copy: "一部不存在的电影完成了，你也完成了一次合法脑洞漂移。" },
         "脑洞编剧"
       )
@@ -1050,7 +1113,10 @@ const activities = [
             ]
           }
         ],
-        ["未来留言已投递，下班后的你可能会点头。"],
+        [
+          "未来留言已投递，下班后的你可能会点头。",
+          "那句话已经发往下班后的你，请记得查收并早点离线。"
+        ],
         { title: "未来留言寄出", copy: "你给之后的自己递了一张小纸条，上面写着：别太用力。" },
         "未来留言"
       )
@@ -1059,6 +1125,317 @@ const activities = [
     dailyRewardLimit: 2
   }
 ];
+
+const activityPresentations: Record<string, Prisma.InputJsonObject> = {
+  match_three_rounds: {
+    badge: "三消避风港",
+    tone: "game",
+    accentColor: "#6655d8",
+    headline: "三关消除，合法换台",
+    scene: "把彩色方块排整齐，比把需求排整齐容易一点。",
+    prompt: "先选战术，再完成占位小游戏。重点不是赢，是让脑子从工作频道退出来。",
+    statLabel: "连击借口",
+    statValue: "76%"
+  },
+  minesweeper_corner: {
+    badge: "风险演习",
+    tone: "game",
+    accentColor: "#6b5bd6",
+    headline: "今天先扫虚拟雷",
+    scene: "现实风险太贵，虚拟格子刚好适合练胆量。",
+    prompt: "选一个扫雷人格，完成安全点击，给风险识别一个体面的出口。",
+    statLabel: "避雷体感",
+    statValue: "81%"
+  },
+  word_puzzle: {
+    badge: "五格换脑",
+    tone: "game",
+    accentColor: "#594fc4",
+    headline: "猜词，但不负责开会发言",
+    scene: "五个字母就够了，今天的大脑不想处理长篇结论。",
+    prompt: "选择开局气质，再完成字母选择。猜不猜中不重要，切频道重要。",
+    statLabel: "语言复活",
+    statValue: "73%"
+  },
+  solitaire_round: {
+    badge: "纸牌秩序",
+    tone: "game",
+    accentColor: "#7560d8",
+    headline: "把混乱排成四摞",
+    scene: "有些混乱来自项目，有些混乱可以被纸牌安静收纳。",
+    prompt: "打一小轮就好，不追求完美通关，只追求短暂控制感。",
+    statLabel: "秩序幻觉",
+    statValue: "62%"
+  },
+  sudoku_row: {
+    badge: "九宫格边角料",
+    tone: "game",
+    accentColor: "#6a58d0",
+    headline: "只填一行，不拯救全局",
+    scene: "整个数独太严肃，一行刚好适合一场温和撤退。",
+    prompt: "找一行填完即可，别把摸鱼变成脑力绩效。",
+    statLabel: "理性回声",
+    statValue: "69%"
+  },
+  memory_cards: {
+    badge: "记忆抽检",
+    tone: "game",
+    accentColor: "#7059cf",
+    headline: "翻牌一次，证明短期记忆还在",
+    scene: "会议可能带走了很多东西，但不一定带走所有记忆。",
+    prompt: "玩一轮翻牌记忆，把注意力从工作堆里捡回来。",
+    statLabel: "记忆余额",
+    statValue: "64%"
+  },
+  stare_at_water: {
+    badge: "水杯研究所",
+    tone: "calm",
+    accentColor: "#1f8f62",
+    headline: "凝视水杯，暂停世界",
+    scene: "这只杯子什么都不催，是难得的稳定同事。",
+    prompt: "盯住它 30 秒，不分析根因，不刷新消息。",
+    statLabel: "液体哲学",
+    statValue: "58%"
+  },
+  window_distance: {
+    badge: "远方缓存",
+    tone: "calm",
+    accentColor: "#287f66",
+    headline: "把视线交给远方 60 秒",
+    scene: "屏幕占了太多注意力，远处今天也想分一点。",
+    prompt: "找一个远处目标看 60 秒，让眼睛从像素里出来透气。",
+    statLabel: "视线越狱",
+    statValue: "72%"
+  },
+  silent_minute: {
+    badge: "静音许可",
+    tone: "calm",
+    accentColor: "#2f8060",
+    headline: "一分钟不解决任何事",
+    scene: "不是所有空白都需要填满，有些空白是给自己留的。",
+    prompt: "安静坐满 1 分钟。什么都不推进，也算一种能力。",
+    statLabel: "空白浓度",
+    statValue: "67%"
+  },
+  warm_drink: {
+    badge: "三口补给",
+    tone: "calm",
+    accentColor: "#3b8a68",
+    headline: "慢慢喝三口水",
+    scene: "补水是最不像摸鱼的摸鱼，甚至有点正当。",
+    prompt: "给每一口一点流程感，不要像处理工单一样一口清空。",
+    statLabel: "补水体面",
+    statValue: "61%"
+  },
+  close_eyes: {
+    badge: "视觉下线",
+    tone: "calm",
+    accentColor: "#2a765f",
+    headline: "闭眼 45 秒，拒收像素",
+    scene: "眼睛今天已经看了太多界面，它申请临时离线。",
+    prompt: "闭眼休息 45 秒，不睡着也没关系，安静就行。",
+    statLabel: "暗屏疗效",
+    statValue: "70%"
+  },
+  desk_breathing: {
+    badge: "呼吸重启",
+    tone: "calm",
+    accentColor: "#238b64",
+    headline: "五次慢呼吸，清理情绪缓存",
+    scene: "空气免费，但经常被我们忘记使用。",
+    prompt: "选一个呼吸借口，然后跟着倒计时慢慢吸气呼气。",
+    statLabel: "脑延迟下降",
+    statValue: "74%"
+  },
+  fake_loading_face: {
+    badge: "加载中演员",
+    tone: "absurd",
+    accentColor: "#8b4d36",
+    headline: "表情进度条缓慢前进",
+    scene: "眉头轻皱，像是在等待一个非常重要的响应。",
+    prompt: "选择你的加载中表情，维持短短几秒，注意别演过头。",
+    statLabel: "表演可信度",
+    statValue: "83%"
+  },
+  strategic_notebook: {
+    badge: "留白方案",
+    tone: "absurd",
+    accentColor: "#94613f",
+    headline: "翻开笔记本，沉思但不内耗",
+    scene: "空白页不会催你，它只负责让你看起来很有思路。",
+    prompt: "选择沉思姿势，完成一次安静、可撤回的办公室表演。",
+    statLabel: "高级感",
+    statValue: "79%"
+  },
+  calendar_inspection: {
+    badge: "日历考古",
+    tone: "absurd",
+    accentColor: "#87543a",
+    headline: "严肃确认今天确实存在",
+    scene: "日历里藏着一些空隙，偶尔也藏着喘气的理由。",
+    prompt: "检查一次日历，然后合上。确认世界还在运行即可。",
+    statLabel: "时间掌控",
+    statValue: "56%"
+  },
+  architecture_stare: {
+    badge: "架构凝视",
+    tone: "absurd",
+    accentColor: "#78513d",
+    headline: "盯着图，假装在权衡宇宙",
+    scene: "箭头、框框和线条都很严肃，适合承接你的短暂出神。",
+    prompt: "选择图的精神用途，凝视 30 秒，让它感受到尊重。",
+    statLabel: "抽象浓度",
+    statValue: "88%"
+  },
+  keyboard_pause: {
+    badge: "键盘悬停",
+    tone: "absurd",
+    accentColor: "#8d5a3d",
+    headline: "双手就位，灵感暂未到岗",
+    scene: "像要写出关键代码，实际是在等待脑内服务启动。",
+    prompt: "悬停 30 秒即可，不需要真的产出让自己痛苦的东西。",
+    statLabel: "装忙稳定性",
+    statValue: "77%"
+  },
+  document_scroll: {
+    badge: "滚动尊重",
+    tone: "absurd",
+    accentColor: "#7d4e37",
+    headline: "缓慢滚动，保持专业距离",
+    scene: "长文档需要尊重，但不一定需要此刻完全读懂。",
+    prompt: "慢慢滚动一页，速度要像在认真吸收组织智慧。",
+    statLabel: "文档礼仪",
+    statValue: "65%"
+  },
+  shoulder_rolls: {
+    badge: "肩部上线",
+    tone: "physical",
+    accentColor: "#b9821f",
+    headline: "肩膀从待机中回来",
+    scene: "久坐会把肩膀变成系统托盘图标，现在点一下它。",
+    prompt: "先确认舒适，再慢慢转 6 次。疼就换任务。",
+    statLabel: "松动幅度",
+    statValue: "68%"
+  },
+  desk_stretch: {
+    badge: "人类形态",
+    tone: "physical",
+    accentColor: "#c08a24",
+    headline: "站起来伸展 30 秒",
+    scene: "椅子已经连续获胜太久，今天让身体赢一小局。",
+    prompt: "确认周围安全，舒服伸展，不和柔韧性较劲。",
+    statLabel: "椅子败率",
+    statValue: "71%"
+  },
+  short_walk: {
+    badge: "短途出走",
+    tone: "physical",
+    accentColor: "#b27a1d",
+    headline: "离开工位，再体面回来",
+    scene: "路线很短，但象征意义很足。",
+    prompt: "选一条安全路线，完成门口或饮水点往返。",
+    statLabel: "离岗闭环",
+    statValue: "86%"
+  },
+  wrist_release: {
+    badge: "手腕解压",
+    tone: "physical",
+    accentColor: "#bd8422",
+    headline: "给手腕一次温和释放",
+    scene: "它敲了太多字，值得一段无绩效转动。",
+    prompt: "轻轻转动 30 秒，不疼、不撑、不参加任何比赛。",
+    statLabel: "按键疲劳",
+    statValue: "63%"
+  },
+  stand_and_sit: {
+    badge: "起坐协议",
+    tone: "physical",
+    accentColor: "#a97520",
+    headline: "缓慢起立再坐下 3 次",
+    scene: "动作很小，但能提醒身体：你不是椅子的扩展插件。",
+    prompt: "量力而行，不舒服就跳过。完成三次即可。",
+    statLabel: "插件脱离",
+    statValue: "75%"
+  },
+  neck_reset: {
+    badge: "颈部重连",
+    tone: "physical",
+    accentColor: "#b47d24",
+    headline: "轻轻活动颈部 20 秒",
+    scene: "脖子不是显示器支架，它也需要一点存在感。",
+    prompt: "只做舒适范围内的小幅动作，不用力、不逞强。",
+    statLabel: "僵硬下降",
+    statValue: "66%"
+  },
+  rename_temp_file: {
+    badge: "命名仪式",
+    tone: "daydream",
+    accentColor: "#2d7d90",
+    headline: "把临时文件升格为 final_v2",
+    scene: "项目可能没变，但文件名已经拥有了命运感。",
+    prompt: "选择命名流派，完成一场不伤害任何生产文件的仪式。",
+    statLabel: "推进幻觉",
+    statValue: "82%"
+  },
+  invent_job_title: {
+    badge: "头衔制造",
+    tone: "daydream",
+    accentColor: "#367f8e",
+    headline: "给自己授予荒诞职称",
+    scene: "真实职位太严肃，精神职位可以临时自助领取。",
+    prompt: "选一个职称风格，获得一份不会加班的头衔。",
+    statLabel: "虚职含金量",
+    statValue: "78%"
+  },
+  alien_status_report: {
+    badge: "地球日报",
+    tone: "daydream",
+    accentColor: "#2f758a",
+    headline: "用外星人语气总结今天",
+    scene: "碳基员工继续运行，地球项目暂无重大突破。",
+    prompt: "用陌生视角看今天，现实会显得没那么理所当然。",
+    statLabel: "离地高度",
+    statValue: "84%"
+  },
+  name_a_cloud: {
+    badge: "云名登记",
+    tone: "daydream",
+    accentColor: "#3c8796",
+    headline: "给远处空白起个名字",
+    scene: "有云就命名云，没有云就命名那块不想工作的天空。",
+    prompt: "起一个名字即可，越不像 KPI 越好。",
+    statLabel: "想象漂移",
+    statValue: "60%"
+  },
+  tiny_movie_plot: {
+    badge: "办公短片",
+    tone: "daydream",
+    accentColor: "#2c7185",
+    headline: "20 秒拍完一部脑内电影",
+    scene: "办公用品终于有机会成为主角，剧情不必合理。",
+    prompt: "选择主角，再给它一个结局。短、怪、轻松就好。",
+    statLabel: "片场离谱",
+    statValue: "87%"
+  },
+  future_message: {
+    badge: "未来便签",
+    tone: "daydream",
+    accentColor: "#347f91",
+    headline: "给下班后的自己递句话",
+    scene: "未来的你也许很累，所以现在先留一点善意过去。",
+    prompt: "选择留言语气，写给那个终于可以离线的人。",
+    statLabel: "下班护盾",
+    statValue: "80%"
+  }
+};
+
+const activities = rawActivities.map((activity) => ({
+  ...activity,
+  rewardConfig: withPresentation(
+    activity.rewardConfig,
+    presentationForActivity(activity.code)
+  )
+}));
 
 async function main() {
   if (dryRun) {
@@ -1086,6 +1463,12 @@ async function main() {
     ) {
       throw new Error("Activity seed must provide authored interactions for at least half of templates and 3 per category");
     }
+    const missingPresentations = activities
+      .filter((activity) => !hasAuthoredPresentation(activity.rewardConfig))
+      .map((activity) => activity.code);
+    if (missingPresentations.length > 0) {
+      throw new Error(`Activity seed missing authored presentation: ${missingPresentations.join(", ")}`);
+    }
 
     console.log(
       JSON.stringify(
@@ -1100,7 +1483,8 @@ async function main() {
           activities: activities.length,
           activityCategories: categoryCounts,
           authoredInteractionCategories: authoredInteractionCounts,
-          authoredInteractions: authoredTotal
+          authoredInteractions: authoredTotal,
+          authoredPresentations: activities.length
         },
         null,
         2
@@ -1148,6 +1532,24 @@ function hasAuthoredInteraction(value: unknown) {
       typeof value === "object" &&
       !Array.isArray(value) &&
       (value as { interaction?: unknown }).interaction
+  );
+}
+
+function hasAuthoredPresentation(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const presentation = (value as { presentation?: unknown }).presentation;
+  return Boolean(
+    presentation &&
+      typeof presentation === "object" &&
+      !Array.isArray(presentation) &&
+      typeof (presentation as { badge?: unknown }).badge === "string" &&
+      typeof (presentation as { headline?: unknown }).headline === "string" &&
+      typeof (presentation as { scene?: unknown }).scene === "string" &&
+      typeof (presentation as { prompt?: unknown }).prompt === "string" &&
+      typeof (presentation as { statLabel?: unknown }).statLabel === "string" &&
+      typeof (presentation as { statValue?: unknown }).statValue === "string"
   );
 }
 
