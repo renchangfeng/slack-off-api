@@ -406,6 +406,65 @@ describe("activity routes", () => {
 
     await server.close();
   });
+
+  it("completes a mini-interaction activity and returns step summaries", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      template: miniInteractionTemplate()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: {
+        interaction: {
+          completedStepIds: ["ack_ready"],
+          tapCounts: { pop_bubbles: 5 }
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      resultTitle: expect.any(String),
+      resultCopy: expect.any(String),
+      stepSummaries: expect.arrayContaining(["完成", "点击 5 次"])
+    });
+    expect(store.assignments[0]).toMatchObject({
+      status: ActivityAssignmentStatus.completed,
+      rewarded: true
+    });
+
+    await server.close();
+  });
+
+  it("rejects a mini-interaction activity until all required steps are complete", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      template: miniInteractionTemplate()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: {
+        interaction: {
+          completedStepIds: ["ack_ready"],
+          tapCounts: { pop_bubbles: 2 }
+        }
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("INTERACTION_INCOMPLETE");
+    expect(store.rewardLedger).toHaveLength(0);
+
+    await server.close();
+  });
 });
 
 function gameInteractionProgress() {
@@ -416,6 +475,52 @@ function gameInteractionProgress() {
         mini_game: { passed: true, score: 3 }
       }
     }
+  };
+}
+
+function miniInteractionTemplate() {
+  return {
+    id: "44444444-4444-4444-8444-444444444444",
+    code: "close_eyes",
+    title: "闭眼点掉 5 个焦虑泡泡",
+    description: "不是睡着，只是暂时拒绝接收视觉需求。",
+    category: ActivityCategory.rest,
+    difficulty: ActivityDifficulty.easy,
+    rewardConfig: {
+      score: 3,
+      interaction: {
+        mode: "guided",
+        estimatedSeconds: 35,
+        proofPolicy: "none",
+        flavorLabel: "闭眼点击",
+        steps: [
+          {
+            id: "ack_ready",
+            type: "ack",
+            title: "准备好闭眼",
+            description: "轻轻闭上眼睛，不舒服就随时睁开。",
+            required: true
+          },
+          {
+            id: "pop_bubbles",
+            type: "tap-pattern",
+            title: "点掉 5 个焦虑泡泡",
+            description: "每点一下，想象一个念头暂时浮走。",
+            required: true,
+            requiredTaps: 5,
+            tapLabel: "泡泡"
+          }
+        ],
+        completionFeedback: ["泡泡点完，视觉需求暂时被拒收。"],
+        resultSummary: {
+          title: "视觉下线成功",
+          copy: "你短暂地拒绝了所有像素，焦虑泡泡也暂时离开了。"
+        }
+      }
+    },
+    cooldownSeconds: 60 * 45,
+    dailyRewardLimit: 3,
+    active: true
   };
 }
 
@@ -439,6 +544,21 @@ async function buildTestServer(store: TestStore) {
   return server;
 }
 
+type TestTemplate = {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  category: ActivityCategory;
+  difficulty: ActivityDifficulty;
+  rewardConfig: Record<string, unknown>;
+  cooldownSeconds: number;
+  dailyRewardLimit: number;
+  active: boolean;
+};
+
+type TestStore = ReturnType<typeof createStore>;
+
 type TestAssignment = {
   id: string;
   userId: string;
@@ -449,14 +569,12 @@ type TestAssignment = {
   expiresAt: Date | null;
   rewarded: boolean;
   idempotencyKey: string | null;
-  template: TestStore["template"];
+  template: TestTemplate;
 };
-
-type TestStore = ReturnType<typeof createStore>;
 
 function createStore() {
   let nextAssignmentId = 1;
-  const template = {
+  const template: TestTemplate = {
     id: templateId,
     code: "match_three_rounds",
     title: "完成消消乐 3 关",
@@ -488,18 +606,20 @@ function createStore() {
       assignedAt?: Date;
       completedAt?: Date | null;
       expiresAt?: Date | null;
+      template?: TestTemplate;
     }) {
+      const assignmentTemplate = input.template ?? template;
       const assignment: TestAssignment = {
         id: `55555555-5555-4555-8555-${String(nextAssignmentId++).padStart(12, "0")}`,
         userId: input.userId,
-        templateId,
+        templateId: assignmentTemplate.id,
         status: input.status ?? ActivityAssignmentStatus.active,
         assignedAt: input.assignedAt ?? new Date(),
         completedAt: input.completedAt ?? null,
         expiresAt: input.expiresAt ?? new Date(Date.now() + 1000 * 60 * 30),
         rewarded: input.rewarded ?? false,
         idempotencyKey: null,
-        template
+        template: assignmentTemplate
       };
       assignments.push(assignment);
       return assignment;

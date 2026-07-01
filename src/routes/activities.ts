@@ -15,6 +15,7 @@ import {
   buildActivityPresentation,
   pickCompletionFeedback,
   summarizeActivityInteraction,
+  summarizeCompletedSteps,
   validateActivityInteractionProgress,
   type ActivityInteractionProgress
 } from "../activities/interaction.js";
@@ -443,7 +444,8 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         },
         feedback: pickCompletionFeedback(interaction, assignment.id),
         resultTitle: interaction.resultSummary.title,
-        resultCopy: interaction.resultSummary.copy
+        resultCopy: interaction.resultSummary.copy,
+        stepSummaries: summarizeCompletedSteps(interaction, body.interaction)
       });
     }
   );

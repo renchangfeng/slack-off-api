@@ -5,8 +5,32 @@ import type {
 } from "@prisma/client";
 import { normalizeActivityCategory } from "./recommendation.js";
 
-export type ActivityInteractionStepType = "ack" | "timer" | "choice" | "mini_game";
+export type ActivityInteractionStepType =
+  | "ack"
+  | "timer"
+  | "choice"
+  | "mini_game"
+  | "tap-pattern"
+  | "shuffle-pick"
+  | "sort"
+  | "breath"
+  | "reaction"
+  | "micro-journal"
+  | "reveal";
+
 export type ActivityProofPolicy = "none" | "optional_photo" | "optional_location" | "external_game";
+
+export type ActivityInteractionStepOption = {
+  id: string;
+  label: string;
+  resultText: string;
+};
+
+export type ActivityInteractionStepItem = {
+  id: string;
+  label: string;
+  resultText?: string;
+};
 
 export type ActivityInteractionStep = {
   id: string;
@@ -15,10 +39,26 @@ export type ActivityInteractionStep = {
   description: string;
   required: boolean;
   durationSeconds?: number;
-  options?: Array<{ id: string; label: string; resultText: string }>;
+  options?: Array<ActivityInteractionStepOption>;
   correctOptionId?: string;
   gameCode?: string;
   requiredResult?: string;
+  requiredTaps?: number;
+  tapLabel?: string;
+  items?: Array<ActivityInteractionStepItem>;
+  correctOrder?: string[];
+  requiredRounds?: number;
+  inhaleSeconds?: number;
+  holdSeconds?: number;
+  exhaleSeconds?: number;
+  requiredSuccessCount?: number;
+  reactionRounds?: number;
+  journalMode?: "text" | "tags" | "both";
+  textMinLength?: number;
+  textMaxLength?: number;
+  tags?: Array<ActivityInteractionStepOption>;
+  minTagCount?: number;
+  maxTagCount?: number;
 };
 
 export type ActivityInteraction = {
@@ -40,6 +80,13 @@ export type ActivityInteractionSummary = {
   hasTimer: boolean;
   hasChoice: boolean;
   hasMiniGame: boolean;
+  hasTapPattern: boolean;
+  hasShufflePick: boolean;
+  hasSort: boolean;
+  hasBreath: boolean;
+  hasReaction: boolean;
+  hasMicroJournal: boolean;
+  hasReveal: boolean;
   proofPolicy: ActivityProofPolicy;
   flavorLabel: string;
 };
@@ -67,6 +114,12 @@ export type ActivityInteractionProgress = {
   timerSeconds?: Record<string, number>;
   choiceAnswers?: Record<string, string>;
   miniGameResults?: Record<string, { passed?: boolean; score?: number }>;
+  tapCounts?: Record<string, number>;
+  selectedOptions?: Record<string, string>;
+  sortedItemIds?: Record<string, string[]>;
+  breathRounds?: Record<string, number>;
+  reactionResults?: Record<string, { successCount: number; attempts: number }>;
+  journalEntries?: Record<string, { text?: string; tagIds?: string[] }>;
 };
 
 export function buildActivityInteraction(template: Pick<
@@ -170,6 +223,13 @@ export function summarizeActivityInteraction(
     hasTimer: interaction.steps.some((step) => step.type === "timer"),
     hasChoice: interaction.steps.some((step) => step.type === "choice"),
     hasMiniGame: interaction.steps.some((step) => step.type === "mini_game"),
+    hasTapPattern: interaction.steps.some((step) => step.type === "tap-pattern"),
+    hasShufflePick: interaction.steps.some((step) => step.type === "shuffle-pick"),
+    hasSort: interaction.steps.some((step) => step.type === "sort"),
+    hasBreath: interaction.steps.some((step) => step.type === "breath"),
+    hasReaction: interaction.steps.some((step) => step.type === "reaction"),
+    hasMicroJournal: interaction.steps.some((step) => step.type === "micro-journal"),
+    hasReveal: interaction.steps.some((step) => step.type === "reveal"),
     proofPolicy: interaction.proofPolicy,
     flavorLabel: interaction.flavorLabel
   };
@@ -220,6 +280,47 @@ export function pickCompletionFeedback(interaction: ActivityInteraction, seed: s
   return options[hash % options.length];
 }
 
+export function summarizeCompletedSteps(
+  interaction: ActivityInteraction,
+  progress: ActivityInteractionProgress | undefined
+): string[] {
+  return interaction.steps
+    .filter((step) => isStepComplete(step, progress))
+    .map((step) => {
+      if (step.type === "choice") {
+        const answer = progress?.choiceAnswers?.[step.id];
+        const option = step.options?.find((o) => o.id === answer);
+        return option ? `选择了「${option.label}」` : "完成选择";
+      }
+      if (step.type === "tap-pattern") {
+        return `点击 ${progress?.tapCounts?.[step.id] ?? step.requiredTaps ?? 1} 次`;
+      }
+      if (step.type === "shuffle-pick" || step.type === "reveal") {
+        const selected = progress?.selectedOptions?.[step.id];
+        const item = step.items?.find((i) => i.id === selected);
+        return item ? `抽到「${item.label}」` : "完成抽取";
+      }
+      if (step.type === "sort") {
+        return "完成排序";
+      }
+      if (step.type === "breath") {
+        return `完成 ${progress?.breathRounds?.[step.id] ?? step.requiredRounds ?? 1} 轮呼吸`;
+      }
+      if (step.type === "reaction") {
+        const result = progress?.reactionResults?.[step.id];
+        return result ? `命中 ${result.successCount} 次` : "完成反应挑战";
+      }
+      if (step.type === "micro-journal") {
+        const entry = progress?.journalEntries?.[step.id];
+        if (step.journalMode === "tags") {
+          return `标记了 ${entry?.tagIds?.length ?? 0} 个标签`;
+        }
+        return "完成记录";
+      }
+      return "完成";
+    });
+}
+
 function interaction(
   estimatedSeconds: number,
   proofPolicy: ActivityProofPolicy,
@@ -257,11 +358,75 @@ function isStepComplete(
   if (step.type === "choice") {
     const answer = progress?.choiceAnswers?.[step.id];
     if (!answer) return false;
+    const validOptionIds = new Set(step.options?.map((option) => option.id) ?? []);
+    if (!validOptionIds.has(answer)) return false;
     return step.correctOptionId ? answer === step.correctOptionId : true;
   }
 
   if (step.type === "mini_game") {
     return progress?.miniGameResults?.[step.id]?.passed === true;
+  }
+
+  if (step.type === "tap-pattern") {
+    return (progress?.tapCounts?.[step.id] ?? 0) >= (step.requiredTaps ?? 1);
+  }
+
+  if (step.type === "shuffle-pick" || step.type === "reveal") {
+    const selected = progress?.selectedOptions?.[step.id];
+    if (!selected) return false;
+    const validIds = step.items?.map((item) => item.id) ?? [];
+    return validIds.includes(selected);
+  }
+
+  if (step.type === "sort") {
+    const submitted = progress?.sortedItemIds?.[step.id];
+    if (!submitted) return false;
+    const configuredIds = step.items?.map((item) => item.id) ?? [];
+    const idsMatch = submitted.length === configuredIds.length
+      && configuredIds.every((id) => submitted.includes(id));
+    if (!idsMatch) return false;
+    if (step.correctOrder && step.correctOrder.length > 0) {
+      return submitted.length === step.correctOrder.length
+        && submitted.every((id, index) => id === step.correctOrder![index]);
+    }
+    return true;
+  }
+
+  if (step.type === "breath") {
+    return (progress?.breathRounds?.[step.id] ?? 0) >= (step.requiredRounds ?? 1);
+  }
+
+  if (step.type === "reaction") {
+    const result = progress?.reactionResults?.[step.id];
+    if (!result) return false;
+    return result.successCount >= (step.requiredSuccessCount ?? 1);
+  }
+
+  if (step.type === "micro-journal") {
+    const entry = progress?.journalEntries?.[step.id];
+    if (!entry) return false;
+    const mode = step.journalMode ?? "text";
+    if (mode === "text" || mode === "both") {
+      const text = (entry.text ?? "").trim();
+      const min = step.textMinLength ?? 0;
+      const max = step.textMaxLength ?? 200;
+      if (text.length < min || text.length > max) return false;
+    }
+    if (mode === "tags" || mode === "both") {
+      const tagCount = entry.tagIds?.length ?? 0;
+      const min = step.minTagCount ?? 0;
+      const max = step.maxTagCount ?? (step.tags?.length ?? 1);
+      if (tagCount < min || tagCount > max) return false;
+      const validTagIds = new Set(step.tags?.map((tag) => tag.id) ?? []);
+      if ((entry.tagIds ?? []).some((id) => !validTagIds.has(id))) return false;
+    }
+    if (mode === "text" && entry.tagIds && entry.tagIds.length > 0) {
+      return false;
+    }
+    if (mode === "tags" && entry.text && entry.text.trim().length > 0) {
+      return false;
+    }
+    return true;
   }
 
   return false;
@@ -418,6 +583,12 @@ function isPresentationTone(value: unknown): value is ActivityPresentationTone {
 
 function defaultFlavorLabel(steps: ActivityInteractionStep[]): string {
   if (steps.some((step) => step.type === "mini_game")) return "小游戏";
+  if (steps.some((step) => step.type === "breath")) return "慢呼吸";
+  if (steps.some((step) => step.type === "reaction")) return "反应挑战";
+  if (steps.some((step) => step.type === "sort")) return "排序";
+  if (steps.some((step) => step.type === "shuffle-pick" || step.type === "reveal")) return "抽取";
+  if (steps.some((step) => step.type === "micro-journal")) return "小记录";
+  if (steps.some((step) => step.type === "tap-pattern")) return "点击";
   if (steps.some((step) => step.type === "timer")) return "倒计时";
   if (steps.some((step) => step.type === "choice")) return "选择题";
   return "轻确认";

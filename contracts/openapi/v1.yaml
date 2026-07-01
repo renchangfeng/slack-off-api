@@ -780,7 +780,18 @@ components:
           type: string
         type:
           type: string
-          enum: [ack, timer, choice, mini_game]
+          enum:
+            - ack
+            - timer
+            - choice
+            - mini_game
+            - tap-pattern
+            - shuffle-pick
+            - sort
+            - breath
+            - reaction
+            - micro-journal
+            - reveal
         title:
           type: string
         description:
@@ -807,6 +818,61 @@ components:
           type: string
         requiredResult:
           type: string
+        requiredTaps:
+          type: integer
+        tapLabel:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              resultText:
+                type: string
+        correctOrder:
+          type: array
+          items:
+            type: string
+        requiredRounds:
+          type: integer
+        inhaleSeconds:
+          type: integer
+        holdSeconds:
+          type: integer
+        exhaleSeconds:
+          type: integer
+        requiredSuccessCount:
+          type: integer
+        reactionRounds:
+          type: integer
+        journalMode:
+          type: string
+          enum: [text, tags, both]
+        textMinLength:
+          type: integer
+        textMaxLength:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: object
+            required: [id, label, resultText]
+            properties:
+              id:
+                type: string
+              label:
+                type: string
+              resultText:
+                type: string
+        minTagCount:
+          type: integer
+        maxTagCount:
+          type: integer
     ActivityInteraction:
       type: object
       required: [mode, estimatedSeconds, proofPolicy, flavorLabel, steps, completionFeedback, resultSummary]
@@ -839,7 +905,21 @@ components:
               type: string
     ActivityInteractionSummary:
       type: object
-      required: [stepCount, estimatedSeconds, hasTimer, hasChoice, hasMiniGame, proofPolicy, flavorLabel]
+      required:
+        - stepCount
+        - estimatedSeconds
+        - hasTimer
+        - hasChoice
+        - hasMiniGame
+        - hasTapPattern
+        - hasShufflePick
+        - hasSort
+        - hasBreath
+        - hasReaction
+        - hasMicroJournal
+        - hasReveal
+        - proofPolicy
+        - flavorLabel
       properties:
         stepCount:
           type: integer
@@ -850,6 +930,20 @@ components:
         hasChoice:
           type: boolean
         hasMiniGame:
+          type: boolean
+        hasTapPattern:
+          type: boolean
+        hasShufflePick:
+          type: boolean
+        hasSort:
+          type: boolean
+        hasBreath:
+          type: boolean
+        hasReaction:
+          type: boolean
+        hasMicroJournal:
+          type: boolean
+        hasReveal:
           type: boolean
         proofPolicy:
           type: string
@@ -881,6 +975,45 @@ components:
                 type: boolean
               score:
                 type: integer
+        tapCounts:
+          type: object
+          additionalProperties:
+            type: integer
+        selectedOptions:
+          type: object
+          additionalProperties:
+            type: string
+        sortedItemIds:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        breathRounds:
+          type: object
+          additionalProperties:
+            type: integer
+        reactionResults:
+          type: object
+          additionalProperties:
+            type: object
+            required: [successCount, attempts]
+            properties:
+              successCount:
+                type: integer
+              attempts:
+                type: integer
+        journalEntries:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              text:
+                type: string
+              tagIds:
+                type: array
+                items:
+                  type: string
     ActivitySkipReason:
       type: string
       enum: [too_much_work, not_interested, not_convenient, want_weirder, other]
@@ -1038,6 +1171,10 @@ components:
           type: string
         resultCopy:
           type: string
+        stepSummaries:
+          type: array
+          items:
+            type: string
         reward:
           type: object
           required: [score, drawProgress, drawChancesGranted, rewarded, reason, achievementsUnlocked]
