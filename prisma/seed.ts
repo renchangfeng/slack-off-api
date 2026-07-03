@@ -485,7 +485,11 @@ function validateAuthoredCopy(code: string, value: unknown) {
   }
 }
 
-function countWidgetUsage(activities: typeof rawActivities) {
+type ActivitySeedForValidation = Array<{
+  rewardConfig: unknown;
+}>;
+
+function countWidgetUsage(activities: ActivitySeedForValidation) {
   const counts: Record<string, number> = {};
   for (const type of allowedStepTypes) {
     counts[type] = 0;
@@ -502,7 +506,7 @@ function countWidgetUsage(activities: typeof rawActivities) {
   return counts;
 }
 
-function countWidgetTypeTemplates(activities: typeof rawActivities) {
+function countWidgetTypeTemplates(activities: ActivitySeedForValidation) {
   const counts: Record<string, number> = {};
   for (const type of allowedStepTypes) {
     counts[type] = 0;
