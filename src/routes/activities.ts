@@ -25,6 +25,7 @@ import {
   canonicalActivityCategories,
   activitySkipReasons,
   explainActivityRecommendation,
+  isActivityFlavor,
   isCanonicalActivityCategory,
   normalizeActivityCategory,
   recommendActivity,
@@ -205,6 +206,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         category: state.category,
         eligible: state.eligible,
         difficulty: state.template.difficulty,
+        flavor: flavorForTemplate(state.template),
         interactionSummary: summarizeActivityInteraction(buildActivityInteraction(state.template)),
         completedCount: state.completedCount,
         categoryCompletionCount: state.categoryCompletionCount,
@@ -256,6 +258,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           recommendationExplanation: explainActivityRecommendation({
             reason: recommendation.reason,
             preferredCategory,
+            flavor: recommendation.flavor,
             recentSkipReasons
           })
         },
@@ -268,6 +271,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         recommendationExplanation: explainActivityRecommendation({
           reason: recommendation.reason,
           preferredCategory,
+          flavor: recommendation.flavor,
           recentSkipReasons
         })
       });
@@ -631,6 +635,11 @@ export async function registerActivityRoutes(server: FastifyInstance) {
   );
 }
 
+function flavorForTemplate(template: ActivityTemplate) {
+  const flavor = (template.rewardConfig as { flavor?: string }).flavor;
+  return isActivityFlavor(flavor) ? flavor : undefined;
+}
+
 async function saveActivityFeedbackEvent(
   server: FastifyInstance,
   input: {
@@ -669,6 +678,7 @@ async function saveActivityFeedbackEvent(
       metadata: {
         templateCode: input.assignment.template.code,
         difficulty: input.assignment.template.difficulty,
+        flavor: flavorForTemplate(input.assignment.template),
         interactionSummary: summary,
         requestId: input.trace.requestId,
         traceId: input.trace.traceId,
@@ -760,12 +770,17 @@ async function loadRecentFeedbackSignals(
     take: 50
   });
 
-  return events.map((event) => ({
-    templateId: event.templateId,
-    category: normalizeActivityCategory(event.category),
-    feedbackType: event.feedbackType,
-    createdAt: event.createdAt
-  }));
+  return events.map((event) => {
+    const metadata = event.metadata as { flavor?: string } | null;
+    const flavor = metadata?.flavor;
+    return {
+      templateId: event.templateId,
+      category: normalizeActivityCategory(event.category),
+      flavor: isActivityFlavor(flavor) ? flavor : undefined,
+      feedbackType: event.feedbackType,
+      createdAt: event.createdAt
+    };
+  });
 }
 
 async function loadRecentSkipReasons(

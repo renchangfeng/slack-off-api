@@ -1,6 +1,11 @@
 import { ActivityFeedbackType } from "@prisma/client";
 import { describe, expect, it } from "vitest";
-import { normalizeActivityCategory, recommendActivity } from "./recommendation.js";
+import {
+  explainActivityRecommendation,
+  isActivityFlavor,
+  normalizeActivityCategory,
+  recommendActivity
+} from "./recommendation.js";
 
 const now = new Date("2026-06-23T08:00:00.000Z");
 
@@ -200,16 +205,56 @@ describe("activity recommendations", () => {
       reason: "TRY_SOMETHING_NEW"
     });
   });
+
+  it("boosts candidates whose flavor the user recently liked", () => {
+    const result = recommendActivity(
+      [
+        candidate("weird", { category: "office_theater", completedCount: 1, flavor: "weird" }),
+        candidate("recharge", { category: "rest", completedCount: 1, flavor: "recharge" })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("liked", "game", ActivityFeedbackType.liked, "weird")],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: "weird",
+      reason: "LIKED_FLAVOR",
+      flavor: "weird"
+    });
+  });
+
+  it("uses friendly language for liked-flavor explanations", () => {
+    const explanation = explainActivityRecommendation({
+      reason: "LIKED_FLAVOR",
+      flavor: "recharge"
+    });
+
+    expect(explanation).toContain("充电恢复");
+    expect(explanation).not.toContain("score");
+    expect(explanation).not.toContain("权重");
+  });
+
+  it("validates controlled flavor values", () => {
+    expect(isActivityFlavor("weird")).toBe(true);
+    expect(isActivityFlavor("recharge")).toBe(true);
+    expect(isActivityFlavor("unknown")).toBe(false);
+    expect(isActivityFlavor(undefined)).toBe(false);
+  });
 });
 
 function feedback(
   templateId: string,
   category: "rest" | "game" | "office_theater" | "physical" | "imagination",
-  feedbackType: ActivityFeedbackType
+  feedbackType: ActivityFeedbackType,
+  flavor?: "quick" | "weird" | "recharge" | "tiny_challenge" | "tiny_reflection"
 ) {
   return {
     templateId,
     category,
+    flavor,
     feedbackType,
     createdAt: now
   };
@@ -223,6 +268,7 @@ function candidate(
     categoryCompletionCount: number;
     lastUsedAt: Date | null;
     difficulty: string;
+    flavor: "quick" | "weird" | "recharge" | "tiny_challenge" | "tiny_reflection";
     interactionSummary: {
       estimatedSeconds: number;
       hasTimer: boolean;
@@ -235,6 +281,7 @@ function candidate(
     category: overrides.category ?? (value === "physical" ? "physical" : "rest"),
     eligible: overrides.eligible ?? true,
     difficulty: overrides.difficulty ?? "easy",
+    flavor: overrides.flavor,
     interactionSummary: overrides.interactionSummary,
     completedCount: overrides.completedCount ?? 1,
     categoryCompletionCount: overrides.categoryCompletionCount ?? 0,

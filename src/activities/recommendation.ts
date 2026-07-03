@@ -24,11 +24,41 @@ export type ActivityInteractionSignalSummary = {
   hasReveal?: boolean;
 };
 
+export type ActivityFlavor =
+  | "quick"
+  | "weird"
+  | "recharge"
+  | "tiny_challenge"
+  | "tiny_reflection";
+
+export const activityFlavors: ActivityFlavor[] = [
+  "quick",
+  "weird",
+  "recharge",
+  "tiny_challenge",
+  "tiny_reflection"
+];
+
+export function isActivityFlavor(value: string | undefined): value is ActivityFlavor {
+  return activityFlavors.includes(value as ActivityFlavor);
+}
+
+export function flavorLabel(flavor: ActivityFlavor): string {
+  return {
+    quick: "快速完成",
+    weird: "脑洞一点",
+    recharge: "充电恢复",
+    tiny_challenge: "小挑战",
+    tiny_reflection: "小反思"
+  }[flavor];
+}
+
 export type RecommendationCandidate<T> = {
   value: T;
   category: CanonicalActivityCategory;
   eligible: boolean;
   difficulty?: string;
+  flavor?: ActivityFlavor;
   interactionSummary?: ActivityInteractionSignalSummary;
   completedCount: number;
   categoryCompletionCount: number;
@@ -48,6 +78,7 @@ export type ActivitySkipReason = (typeof activitySkipReasons)[number];
 export type ActivityFeedbackSignal = {
   templateId: string;
   category: CanonicalActivityCategory;
+  flavor?: ActivityFlavor;
   feedbackType: ActivityFeedbackType;
   createdAt: Date;
 };
@@ -58,6 +89,7 @@ export type RecommendationReason =
   | "MATCHES_HISTORY"
   | "AVAILABLE_NOW"
   | "LIKED_CATEGORY"
+  | "LIKED_FLAVOR"
   | "SHORTER_AFTER_FEEDBACK"
   | "WEIRDER_AFTER_FEEDBACK"
   | "AVOIDED_RECENT_DISLIKE"
@@ -67,11 +99,13 @@ export type RecommendationResult<T> = {
   value: T;
   score: number;
   reason: RecommendationReason;
+  flavor?: ActivityFlavor;
 };
 
 export function explainActivityRecommendation(input: {
   reason: RecommendationResult<unknown>["reason"] | "ACTIVE_ASSIGNMENT";
   preferredCategory?: CanonicalActivityCategory;
+  flavor?: ActivityFlavor;
   recentSkipReasons?: ActivitySkipReason[];
 }): string {
   if (input.reason === "ACTIVE_ASSIGNMENT") {
@@ -79,6 +113,9 @@ export function explainActivityRecommendation(input: {
   }
   if (input.reason === "LIKED_CATEGORY") {
     return "按你最近觉得有意思的类型推荐，手感应该更接近。";
+  }
+  if (input.reason === "LIKED_FLAVOR" && input.flavor) {
+    return `按你最近偏好的${flavorLabel(input.flavor)}风格推荐，应该更对你的口味。`;
   }
   if (input.reason === "SHORTER_AFTER_FEEDBACK") {
     return "你最近想短一点，所以这次优先轻量快速完成。";
@@ -218,7 +255,8 @@ export function recommendActivity<T>(
       return {
         value: candidate.value,
         score,
-        reason: feedbackReason ?? reason
+        reason: feedbackReason ?? reason,
+        flavor: candidate.flavor
       };
     })
     .sort((left, right) => right.score - left.score);
@@ -234,6 +272,7 @@ export function recommendActivity<T>(
 
 function summarizeFeedbackSignals(signals: ActivityFeedbackSignal[]) {
   const likedCategories = new Map<CanonicalActivityCategory, number>();
+  const likedFlavors = new Map<ActivityFlavor, number>();
   const dislikedTemplates = new Set<string>();
   const dislikedCategories = new Map<CanonicalActivityCategory, number>();
   let wantsWeirder = 0;
@@ -243,6 +282,9 @@ function summarizeFeedbackSignals(signals: ActivityFeedbackSignal[]) {
   for (const signal of signals) {
     if (signal.feedbackType === "liked") {
       likedCategories.set(signal.category, (likedCategories.get(signal.category) ?? 0) + 1);
+      if (signal.flavor) {
+        likedFlavors.set(signal.flavor, (likedFlavors.get(signal.flavor) ?? 0) + 1);
+      }
     }
     if (signal.feedbackType === "dislike_similar") {
       dislikedTemplates.add(signal.templateId);
@@ -265,6 +307,7 @@ function summarizeFeedbackSignals(signals: ActivityFeedbackSignal[]) {
 
   return {
     likedCategories,
+    likedFlavors,
     dislikedTemplates,
     dislikedCategories,
     wantsWeirder: Math.min(wantsWeirder, 3),
@@ -285,6 +328,14 @@ function scoreFeedbackCandidate<T>(
   if (likedCategoryCount > 0) {
     score += Math.min(likedCategoryCount, 3) * 8;
     reason = "LIKED_CATEGORY";
+  }
+
+  if (candidate.flavor) {
+    const likedFlavorCount = summary.likedFlavors.get(candidate.flavor) ?? 0;
+    if (likedFlavorCount > 0) {
+      score += Math.min(likedFlavorCount, 3) * 6;
+      reason = "LIKED_FLAVOR";
+    }
   }
 
   if (candidateId && summary.dislikedTemplates.has(candidateId)) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildActivityInteraction,
+  summarizeCompletedSteps,
   validateActivityInteractionProgress
 } from "./interaction.js";
 
@@ -275,6 +276,48 @@ describe("activity interaction validation", () => {
     const interaction = buildActivityInteraction(template);
     expect(interaction.steps.length).toBeGreaterThan(0);
     expect(interaction.steps.some((step) => step.type === "timer" || step.type === "ack")).toBe(true);
+  });
+
+  it("summarizes completed widget steps without judging performance", () => {
+    const interaction = buildInteraction([
+      {
+        id: "choice",
+        type: "choice",
+        title: "选",
+        description: "选一个",
+        required: true,
+        options: [
+          { id: "a", label: "A", resultText: "a" },
+          { id: "b", label: "B", resultText: "b" }
+        ]
+      },
+      {
+        id: "tap",
+        type: "tap-pattern",
+        title: "点",
+        description: "点泡泡",
+        required: true,
+        requiredTaps: 5
+      },
+      {
+        id: "breath",
+        type: "breath",
+        title: "呼吸",
+        description: "呼吸",
+        required: true,
+        requiredRounds: 3
+      }
+    ]);
+    const progress = {
+      choiceAnswers: { choice: "a" },
+      tapCounts: { tap: 5 },
+      breathRounds: { breath: 3 }
+    };
+    const lines = summarizeCompletedSteps(interaction, progress);
+    expect(lines).toContain("选择了「A」");
+    expect(lines).toContain("点击 5 次");
+    expect(lines).toContain("完成 3 轮呼吸");
+    expect(lines.every((line) => !line.includes("优秀") && !line.includes("评分"))).toBe(true);
   });
 });
 

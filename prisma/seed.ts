@@ -278,13 +278,23 @@ const achievements = [
   }
 ];
 
+const activityFlavors = new Set([
+  "quick",
+  "weird",
+  "recharge",
+  "tiny_challenge",
+  "tiny_reflection"
+]);
+
 function withInteraction(
   rewardConfig: Prisma.InputJsonObject,
-  interaction: Prisma.InputJsonObject
+  interaction: Prisma.InputJsonObject,
+  flavor?: string
 ) {
   return {
     ...rewardConfig,
-    interaction
+    interaction,
+    ...(flavor ? { flavor } : {})
   };
 }
 
@@ -339,6 +349,8 @@ const allowedStepTypes = new Set([
   "reveal"
 ]);
 
+const privacySafeProofPolicies = new Set(["none", "external_game"]);
+
 function validateAuthoredInteraction(code: string, value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Activity ${code} has malformed authored interaction`);
@@ -355,8 +367,13 @@ function validateAuthoredInteraction(code: string, value: unknown) {
   if (typeof interaction.estimatedSeconds !== "number") {
     throw new Error(`Activity ${code} interaction estimatedSeconds must be a number`);
   }
-  if (typeof interaction.proofPolicy !== "string") {
-    throw new Error(`Activity ${code} interaction proofPolicy must be a string`);
+  if (
+    typeof interaction.proofPolicy !== "string" ||
+    !privacySafeProofPolicies.has(interaction.proofPolicy)
+  ) {
+    throw new Error(
+      `Activity ${code} interaction proofPolicy must be privacy-safe (${[...privacySafeProofPolicies].join(", ")})`
+    );
   }
   if (!Array.isArray(interaction.steps)) {
     throw new Error(`Activity ${code} interaction steps must be an array`);
@@ -418,6 +435,103 @@ function validateAuthoredInteraction(code: string, value: unknown) {
   }
 }
 
+function validateAuthoredCopy(code: string, value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Activity ${code} has malformed authored interaction for copy validation`);
+  }
+  const interaction = value as {
+    steps?: unknown;
+    completionFeedback?: unknown;
+    resultSummary?: unknown;
+  };
+  if (!Array.isArray(interaction.completionFeedback) || interaction.completionFeedback.length === 0) {
+    throw new Error(`Activity ${code} missing authored completionFeedback`);
+  }
+  if (interaction.completionFeedback.some((line) => typeof line !== "string" || !line.trim())) {
+    throw new Error(`Activity ${code} has empty authored completionFeedback`);
+  }
+  const resultSummary = interaction.resultSummary;
+  if (
+    !resultSummary ||
+    typeof resultSummary !== "object" ||
+    Array.isArray(resultSummary) ||
+    typeof (resultSummary as { title?: unknown }).title !== "string" ||
+    !(resultSummary as { title?: string }).title?.trim() ||
+    typeof (resultSummary as { copy?: unknown }).copy !== "string" ||
+    !(resultSummary as { copy?: string }).copy?.trim()
+  ) {
+    throw new Error(`Activity ${code} missing authored resultSummary title/copy`);
+  }
+  if (!Array.isArray(interaction.steps)) {
+    throw new Error(`Activity ${code} missing steps for copy validation`);
+  }
+  for (const step of interaction.steps) {
+    if (!step || typeof step !== "object" || Array.isArray(step)) {
+      throw new Error(`Activity ${code} step malformed during copy validation`);
+    }
+    const s = step as Record<string, unknown>;
+    for (const key of ["title", "description"]) {
+      const value = s[key];
+      if (typeof value !== "string" || value.trim().length === 0) {
+        throw new Error(`Activity ${code} step ${s.id} missing authored ${key}`);
+      }
+    }
+    if (s.type === "choice") {
+      const options = s.options as Array<{ label?: unknown }> | undefined;
+      if (!Array.isArray(options) || options.some((o) => typeof o.label !== "string" || !o.label.trim())) {
+        throw new Error(`Activity ${code} choice step ${s.id} missing option labels`);
+      }
+    }
+  }
+}
+
+function countWidgetUsage(activities: typeof rawActivities) {
+  const counts: Record<string, number> = {};
+  for (const type of allowedStepTypes) {
+    counts[type] = 0;
+  }
+  for (const activity of activities) {
+    const interaction = (activity.rewardConfig as { interaction?: { steps?: Array<{ type: string }> } }).interaction;
+    if (!interaction?.steps) continue;
+    for (const step of interaction.steps) {
+      if (allowedStepTypes.has(step.type)) {
+        counts[step.type] = (counts[step.type] ?? 0) + 1;
+      }
+    }
+  }
+  return counts;
+}
+
+function countWidgetTypeTemplates(activities: typeof rawActivities) {
+  const counts: Record<string, number> = {};
+  for (const type of allowedStepTypes) {
+    counts[type] = 0;
+  }
+  for (const activity of activities) {
+    const interaction = (activity.rewardConfig as { interaction?: { steps?: Array<{ type: string }> } }).interaction;
+    if (!interaction?.steps) continue;
+    const usedTypes = new Set(interaction.steps.map((step) => step.type));
+    for (const type of usedTypes) {
+      if (allowedStepTypes.has(type)) {
+        counts[type] = (counts[type] ?? 0) + 1;
+      }
+    }
+  }
+  return counts;
+}
+
+function validateFlavor(code: string, rewardConfig: unknown) {
+  if (!rewardConfig || typeof rewardConfig !== "object" || Array.isArray(rewardConfig)) {
+    throw new Error(`Activity ${code} missing rewardConfig for flavor validation`);
+  }
+  const flavor = (rewardConfig as { flavor?: unknown }).flavor;
+  if (typeof flavor !== "string" || !activityFlavors.has(flavor)) {
+    throw new Error(
+      `Activity ${code} missing or invalid flavor (got ${String(flavor)}). Allowed: ${[...activityFlavors].join(", ")}`
+    );
+  }
+}
+
 const rawActivities = [
   // Mini-games
   {
@@ -457,8 +571,11 @@ const rawActivities = [
         [
           "消消乐训练结束，大脑成功假装换了一块显卡。",
           "三关小混乱已被你体面消除，手指申请短暂表扬。"
-        ]
-      )
+        ],
+        { title: "三消训练完成", copy: "大脑假装换了一块显卡，手指也假装参与了高级操作。" },
+        "三消小游戏"
+      ),
+      "tiny_challenge"
     ),
     cooldownSeconds: 60 * 60 * 6,
     dailyRewardLimit: 1
@@ -503,7 +620,8 @@ const rawActivities = [
         ],
         { title: "风险识别完成", copy: "你刚刚严肃地处理了一块虚拟雷区，现实问题先排队。" },
         "风险小游戏"
-      )
+      ),
+      "tiny_challenge"
     ),
     cooldownSeconds: 60 * 60 * 4,
     dailyRewardLimit: 1
@@ -548,7 +666,8 @@ const rawActivities = [
         ],
         { title: "单词频道切换成功", copy: "工作脑暂时退后台，猜词脑上来透了口气。" },
         "字谜小游戏"
-      )
+      ),
+      "tiny_challenge"
     ),
     cooldownSeconds: 60 * 60 * 4,
     dailyRewardLimit: 1
@@ -559,7 +678,43 @@ const rawActivities = [
     description: "把混乱排成四摞，获得短暂控制感。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        50,
+        "external_game",
+        [
+          {
+            id: "patience_style",
+            type: "choice",
+            title: "选择接龙策略",
+            description: "决定今天怎么面对这堆牌。",
+            required: true,
+            options: [
+              { id: "sort", label: "先排序", resultText: "先把能排的排好，剩下的交给命运。" },
+              { id: "expose", label: "先翻牌", resultText: "把隐藏牌翻出来，信息优先。" },
+              { id: "calm", label: "慢慢来", resultText: "不追速度，只追过程。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "完成一次牌面整理",
+            description: "用占位小游戏完成一次整理动作。",
+            required: true,
+            gameCode: "safe_click",
+            requiredResult: "完成一次有效点击"
+          }
+        ],
+        [
+          "接龙仪式完成，混乱暂时被四摞牌收容。",
+          "你没有拯救世界，但拯救了一小片桌面秩序。"
+        ],
+        { title: "秩序恢复", copy: "一小局接龙结束，混乱被安静地码好了。" },
+        "纸牌秩序"
+      ),
+      "tiny_challenge"
+    ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
   },
@@ -569,7 +724,43 @@ const rawActivities = [
     description: "只填一行，不负责拯救整个九宫格。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 6 },
+    rewardConfig: withInteraction(
+      { score: 6 },
+      guidedInteraction(
+        55,
+        "external_game",
+        [
+          {
+            id: "row_style",
+            type: "choice",
+            title: "选择开局行",
+            description: "今天准备从哪一行开始？",
+            required: true,
+            options: [
+              { id: "top", label: "第一行", resultText: "从顶部开始，视野开阔。" },
+              { id: "middle", label: "中间行", resultText: "从中间切入，风险分散。" },
+              { id: "bottom", label: "最底行", resultText: "从底部稳扎稳打。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "填入一个数字",
+            description: "用占位小游戏完成一次数字选择。",
+            required: true,
+            gameCode: "word_pick",
+            requiredResult: "完成一次数字选择"
+          }
+        ],
+        [
+          "一行数独完成，九宫格的命运你负责了 1/9。",
+          "理性小闭环达成，剩下的八行假装没看见。"
+        ],
+        { title: "一行数独完成", copy: "你认真填完了一行，没有拯救全局，但完成了自己的部分。" },
+        "一行数独"
+      ),
+      "tiny_challenge"
+    ),
     cooldownSeconds: 60 * 60 * 3,
     dailyRewardLimit: 2
   },
@@ -579,7 +770,52 @@ const rawActivities = [
     description: "确认短期记忆还没有被会议彻底占满。",
     category: ActivityCategory.game,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 5 },
+    rewardConfig: withInteraction(
+      { score: 5 },
+      guidedInteraction(
+        40,
+        "external_game",
+        [
+          {
+            id: "memory_mode",
+            type: "choice",
+            title: "选择记忆策略",
+            description: "今天准备靠什么记住位置？",
+            required: true,
+            options: [
+              { id: "color", label: "颜色联想", resultText: "用颜色当钩子，记忆更轻。" },
+              { id: "position", label: "位置记忆", resultText: "把位置当成小地图。" },
+              { id: "luck", label: "随缘翻牌", resultText: "运气也是短期记忆的一种。" }
+            ]
+          },
+          {
+            id: "mini_game",
+            type: "mini_game",
+            title: "完成一次记忆匹配",
+            description: "用占位小游戏模拟一次翻牌匹配。",
+            required: true,
+            gameCode: "tap_combo",
+            requiredResult: "完成 5 次有效点击"
+          },
+          {
+            id: "match_reaction",
+            type: "reaction",
+            title: "看到匹配信号再点",
+            description: "图案闪现时快速点击，允许一次走神。",
+            required: true,
+            requiredSuccessCount: 2,
+            reactionRounds: 3
+          }
+        ],
+        [
+          "翻牌完成，短期记忆还有余额。",
+          "至少这一局，你的注意力没有被会议全部带走。"
+        ],
+        { title: "记忆抽检通过", copy: "你完成了一轮翻牌加反应挑战，短期记忆确认还有余额。" },
+        "翻牌记忆"
+      ),
+      "quick"
+    ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
   },
@@ -616,8 +852,11 @@ const rawActivities = [
         [
           "水杯已被充分研究，世界暂时没有变坏。",
           "液体动力学观察结束，你和水杯达成短暂共识。"
-        ]
-      )
+        ],
+        { title: "水杯研究完成", copy: "你认真盯着水杯 30 秒，没有结论，但杯子感受到了尊重。" },
+        "水杯凝视"
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 3
@@ -656,7 +895,8 @@ const rawActivities = [
         ],
         { title: "眼睛离线成功", copy: "你刚刚把注意力投向远方，灵魂也顺便伸了个懒腰。" },
         "护眼倒计时"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 3
@@ -667,7 +907,52 @@ const rawActivities = [
     description: "什么都不解决，也是一种稀缺能力。",
     category: ActivityCategory.rest,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        65,
+        "none",
+        [
+          {
+            id: "posture",
+            type: "ack",
+            title: "找一个舒服的姿势",
+            description: "坐着就行，不用盘腿或摆出冥想造型。",
+            required: true
+          },
+          {
+            id: "silent_timer",
+            type: "timer",
+            title: "安静 60 秒",
+            description: "不解决、不刷新、不分析，只是安静坐着。",
+            required: true,
+            durationSeconds: 60
+          },
+          {
+            id: "mood_tag",
+            type: "micro-journal",
+            title: "标记一下此刻",
+            description: "选一个最轻的状态标签，不写小作文。",
+            required: false,
+            journalMode: "tags",
+            tags: [
+              { id: "calm", label: "平静", resultText: "平静已记录。" },
+              { id: "tired", label: "累", resultText: "累已记录。" },
+              { id: "wired", label: "紧绷", resultText: "紧绷已记录。" }
+            ],
+            minTagCount: 1,
+            maxTagCount: 1
+          }
+        ],
+        [
+          "一分钟空白完成，世界暂时没有变得更糟。",
+          "你什么都没有解决，但给自己留了一分钟。"
+        ],
+        { title: "一分钟空白完成", copy: "你安静坐满了一分钟，没有产出，但也没有被榨取。" },
+        "静音许可"
+      ),
+      "recharge"
+    ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
   },
@@ -677,7 +962,46 @@ const rawActivities = [
     description: "不要一饮而尽，给每一口一点流程感。",
     category: ActivityCategory.rest,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 3 },
+    rewardConfig: withInteraction(
+      { score: 3 },
+      guidedInteraction(
+        35,
+        "none",
+        [
+          {
+            id: "sip_taps",
+            type: "tap-pattern",
+            title: "慢慢喝 3 口水",
+            description: "每喝一口点一下，给自己一点流程感。",
+            required: true,
+            requiredTaps: 3,
+            tapLabel: "口"
+          },
+          {
+            id: "drink_note",
+            type: "micro-journal",
+            title: "给这口水一个形容词",
+            description: "选一个标签，不用写评测。",
+            required: false,
+            journalMode: "tags",
+            tags: [
+              { id: "warm", label: "温热", resultText: "温热已记录。" },
+              { id: "cold", label: "清凉", resultText: "清凉已记录。" },
+              { id: "bitter", label: "有点苦", resultText: "有点苦已记录。" }
+            ],
+            minTagCount: 1,
+            maxTagCount: 1
+          }
+        ],
+        [
+          "三口喝完，每一口都有自己的流程感。",
+          "补水仪式完成，身体表示收到。"
+        ],
+        { title: "三口补给完成", copy: "你慢慢喝了三口水，短暂的流程感也是一种休息。" },
+        "三口补给"
+      ),
+      "recharge"
+    ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 4
   },
@@ -716,7 +1040,8 @@ const rawActivities = [
         ],
         { title: "视觉下线成功", copy: "你短暂地拒绝了所有像素，焦虑泡泡也暂时离开了。" },
         "闭眼点击"
-      )
+      ),
+      "quick"
     ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
@@ -778,7 +1103,8 @@ const rawActivities = [
         ],
         { title: "呼吸系统上线", copy: "你没有解决世界，但把自己从紧绷里捞回来了一点。" },
         "慢呼吸"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
@@ -825,7 +1151,8 @@ const rawActivities = [
         ],
         { title: "加载表演验收通过", copy: "你完成了一次可撤回的办公室表演，观众主要是空气。" },
         "反应表演"
-      )
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
@@ -868,7 +1195,8 @@ const rawActivities = [
         ],
         { title: "留白方案已形成", copy: "你没有写下任何字，但气场像是刚做完一次高层对齐。" },
         "办公室表演"
-      )
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
@@ -879,7 +1207,47 @@ const rawActivities = [
     description: "确认今天确实存在，然后放心地合上。",
     category: ActivityCategory.office_theater,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        35,
+        "none",
+        [
+          {
+            id: "inspection_style",
+            type: "choice",
+            title: "选择检查风格",
+            description: "严肃地确认今天存在，方式由你决定。",
+            required: true,
+            options: [
+              { id: "nod", label: "点头确认", resultText: "你严肃地点了点头，表示今天存在。" },
+              { id: "squint", label: "眯眼审视", resultText: "你眯起眼，像在看一个复杂方案。" },
+              { id: "sigh", label: "轻叹合上", resultText: "你轻叹一声，合上了日历。" }
+            ]
+          },
+          {
+            id: "today_sign",
+            type: "reveal",
+            title: "翻开今日签",
+            description: "点一下翻开，作为对今天的正式确认。",
+            required: true,
+            items: [
+              { id: "exists", label: "今日存在" },
+              { id: "busy", label: "今日较忙" },
+              { id: "gap", label: "有缝隙" },
+              { id: "leave", label: "允许下班" }
+            ]
+          }
+        ],
+        [
+          "日历检查完成，今天确实存在，可以稍微放心了。",
+          "你已经正式确认过今天，合上日历的动作很有仪式感。"
+        ],
+        { title: "今日已确认", copy: "你严肃地检查了日历，并郑重确认今天存在。" },
+        "日历考古"
+      ),
+      "weird"
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -914,6 +1282,19 @@ const rawActivities = [
             description: "眉头微皱，不要真的把自己绕进去。",
             required: true,
             durationSeconds: 30
+          },
+          {
+            id: "priority_sort",
+            type: "sort",
+            title: "把图中元素按重要性排序",
+            description: "拖动条目，排出你心中的架构优先级。",
+            required: true,
+            items: [
+              { id: "core", label: "核心模块" },
+              { id: "edge", label: "边界依赖" },
+              { id: "noise", label: "噪音需求" },
+              { id: "future", label: "未来债务" }
+            ]
           }
         ],
         [
@@ -922,7 +1303,8 @@ const rawActivities = [
         ],
         { title: "架构权衡结束", copy: "这张图已经被你严肃观察，短期内应该不会反抗。" },
         "架构凝视"
-      )
+      ),
+      "tiny_challenge"
     ),
     cooldownSeconds: 60 * 90,
     dailyRewardLimit: 2
@@ -933,7 +1315,42 @@ const rawActivities = [
     description: "像要写出关键代码，实际是在等待灵感上线。",
     category: ActivityCategory.office_theater,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        40,
+        "none",
+        [
+          {
+            id: "pause_pose",
+            type: "choice",
+            title: "选择悬停姿态",
+            description: "选一个看起来像深度思考的姿势。",
+            required: true,
+            options: [
+              { id: "fingers", label: "指尖悬停", resultText: "指尖在键帽上方，随时准备起飞。" },
+              { id: "chin", label: "单手托腮", resultText: "托腮沉思，显得问题很复杂。" },
+              { id: "blank", label: "直视屏幕", resultText: "屏幕里的光标替你承担沉默。" }
+            ]
+          },
+          {
+            id: "pause_timer",
+            type: "timer",
+            title: "悬停 30 秒",
+            description: "不要真的敲下去，让灵感假装在加载。",
+            required: true,
+            durationSeconds: 30
+          }
+        ],
+        [
+          "悬停完成，灵感可能没上线，但表演很到位。",
+          "30 秒键盘静止，同事可能会以为你在思考大事。"
+        ],
+        { title: "键盘悬停结束", copy: "你让双手在键盘上空停了 30 秒，表演可信度 +1。" },
+        "键盘悬停"
+      ),
+      "weird"
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -976,7 +1393,8 @@ const rawActivities = [
         ],
         { title: "文档滚动仪式完成", copy: "你缓慢滚动并整理了一份文档的优先级，过程比结果重要。" },
         "文档排序"
-      )
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
@@ -1029,7 +1447,8 @@ const rawActivities = [
         ],
         { title: "肩膀重新上线", copy: "你轻轻唤醒了肩膀，还顺手清理了半口紧绷。" },
         "肩颈放松"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
@@ -1068,7 +1487,8 @@ const rawActivities = [
         ],
         { title: "身体重新上线", copy: "你从工位形态恢复成人类形态，哪怕只有半分钟。" },
         "身体重启"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
@@ -1083,7 +1503,7 @@ const rawActivities = [
       { score: 6, drawProgress: 1 },
       guidedInteraction(
         50,
-        "optional_location",
+        "none",
         [
           {
             id: "route",
@@ -1111,7 +1531,8 @@ const rawActivities = [
         ],
         { title: "短途出走完成", copy: "你离开了工位，又体面地回来了，像一场微型冒险。" },
         "短途移动"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
@@ -1153,7 +1574,8 @@ const rawActivities = [
         ],
         { title: "手腕已释放", copy: "你给了手腕一段无绩效的转动时间，它表示感谢。" },
         "手腕呼吸"
-      )
+      ),
+      "recharge"
     ),
     cooldownSeconds: 60 * 30,
     dailyRewardLimit: 4
@@ -1164,7 +1586,38 @@ const rawActivities = [
     description: "量力而行，头晕或不适就直接跳过。",
     category: ActivityCategory.physical,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 6 },
+    rewardConfig: withInteraction(
+      { score: 6 },
+      guidedInteraction(
+        45,
+        "none",
+        [
+          {
+            id: "safety",
+            type: "ack",
+            title: "确认身体状态",
+            description: "头晕或不适就直接跳过，身体优先。",
+            required: true
+          },
+          {
+            id: "sit_stand_taps",
+            type: "tap-pattern",
+            title: "缓慢起立坐下 3 次",
+            description: "每完成一次点一下，动作越慢越算数。",
+            required: true,
+            requiredTaps: 3,
+            tapLabel: "次"
+          }
+        ],
+        [
+          "起坐完成，身体短暂证明自己不是椅子插件。",
+          "三次起立坐下，你和重力达成了一次小和解。"
+        ],
+        { title: "起坐协议完成", copy: "你缓慢起立坐下 3 次，身体确认还拥有站立权限。" },
+        "起坐协议"
+      ),
+      "tiny_challenge"
+    ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
   },
@@ -1174,7 +1627,48 @@ const rawActivities = [
     description: "只做舒适范围内的小幅动作，不要用力甩动。",
     category: ActivityCategory.physical,
     difficulty: ActivityDifficulty.easy,
-    rewardConfig: { score: 4 },
+    rewardConfig: withInteraction(
+      { score: 4 },
+      guidedInteraction(
+        45,
+        "none",
+        [
+          {
+            id: "safety",
+            type: "ack",
+            title: "确认动作舒适",
+            description: "只做小幅动作，疼或晕就跳过。",
+            required: true
+          },
+          {
+            id: "neck_timer",
+            type: "timer",
+            title: "轻轻活动 20 秒",
+            description: "缓慢小幅度活动颈部，不用力甩。",
+            required: true,
+            durationSeconds: 20
+          },
+          {
+            id: "neck_breath",
+            type: "breath",
+            title: "配合呼吸 2 轮",
+            description: "边活动边呼吸，动作比幅度重要。",
+            required: true,
+            requiredRounds: 2,
+            inhaleSeconds: 3,
+            holdSeconds: 1,
+            exhaleSeconds: 3
+          }
+        ],
+        [
+          "颈部重连完成，头和肩膀恢复了基本外交关系。",
+          "20 秒活动 + 两轮呼吸，脖子表示可以继续服役。"
+        ],
+        { title: "颈部重连完成", copy: "你轻轻活动了颈部 20 秒，并配合两轮呼吸，僵硬感稍退。" },
+        "颈部重连"
+      ),
+      "recharge"
+    ),
     cooldownSeconds: 60 * 45,
     dailyRewardLimit: 3
   },
@@ -1211,7 +1705,8 @@ const rawActivities = [
         ],
         { title: "命名仪式完成", copy: "一个名字改变不了项目，但能让你短暂拥有掌控感。" },
         "脑洞选择"
-      )
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
@@ -1239,13 +1734,29 @@ const rawActivities = [
               { id: "chair", label: "工位生态系", resultText: "人体工学椅外交官上线。" },
               { id: "meeting", label: "会议玄学系", resultText: "议程走向观测员上线。" }
             ]
+          },
+          {
+            id: "title_suffix",
+            type: "shuffle-pick",
+            title: "抽取职称后缀",
+            description: "点一下，领取一个临时后缀，不影响任何职级。",
+            required: true,
+            items: [
+              { id: "senior", label: "高级版" },
+              { id: "trainee", label: "见习版" },
+              { id: "acting", label: "代理版" },
+              { id: "honorary", label: "荣誉版" }
+            ]
           }
         ],
         [
           "荒诞职称已生成，你现在拥有一份不会加班的头衔。",
           "新头衔已授予，权限包括短暂开心和拒绝过度严肃。"
-        ]
-      )
+        ],
+        { title: "荒诞职称授予", copy: "你给自己发明了一个不会加班的职称，权限包括短暂开心。" },
+        "头衔制造"
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
@@ -1256,7 +1767,44 @@ const rawActivities = [
     description: "地球项目仍在运行，碳基员工申请短暂冷却。",
     category: ActivityCategory.imagination,
     difficulty: ActivityDifficulty.normal,
-    rewardConfig: { score: 6 },
+    rewardConfig: withInteraction(
+      { score: 6 },
+      guidedInteraction(
+        50,
+        "none",
+        [
+          {
+            id: "alien_tone",
+            type: "choice",
+            title: "选择外星人视角",
+            description: "从哪个星球观察今天的地球项目？",
+            required: true,
+            options: [
+              { id: "observer", label: "中立观测员", resultText: "碳基员工继续运行，无明显异常。" },
+              { id: "bored", label: "无聊访客", resultText: "地球项目看起来重复率偏高。" },
+              { id: "concerned", label: "担忧邻星", resultText: "建议该星球增加休息补给。" }
+            ]
+          },
+          {
+            id: "status_text",
+            type: "micro-journal",
+            title: "用一句话总结今日地球项目",
+            description: "不用真的写成报告，一句话就行。",
+            required: true,
+            journalMode: "text",
+            textMinLength: 5,
+            textMaxLength: 50
+          }
+        ],
+        [
+          "外星人视角已启用，今天看起来没那么理所当然。",
+          "碳基员工总结已提交，宇宙表示收到但不评论。"
+        ],
+        { title: "地球日报已提交", copy: "你用外星人语气总结了一天，现实暂时失去了它的沉重感。" },
+        "地球日报"
+      ),
+      "weird"
+    ),
     cooldownSeconds: 60 * 60 * 3,
     dailyRewardLimit: 1
   },
@@ -1292,7 +1840,8 @@ const rawActivities = [
         ],
         { title: "云名登记完成", copy: "你给一块空白颁发了临时名字，想象力获得了一小片合法居留权。" },
         "抽云名"
-      )
+      ),
+      "weird"
     ),
     cooldownSeconds: 60 * 60,
     dailyRewardLimit: 2
@@ -1335,7 +1884,8 @@ const rawActivities = [
         ],
         { title: "办公大片杀青", copy: "一部不存在的电影完成了，你也完成了一次合法脑洞漂移。" },
         "脑洞编剧"
-      )
+      ),
+      "tiny_reflection"
     ),
     cooldownSeconds: 60 * 60 * 3,
     dailyRewardLimit: 1
@@ -1394,7 +1944,8 @@ const rawActivities = [
         ],
         { title: "未来留言寄出", copy: "你给之后的自己递了一张小纸条，上面写着：别太用力。" },
         "未来留言"
-      )
+      ),
+      "tiny_reflection"
     ),
     cooldownSeconds: 60 * 60 * 2,
     dailyRewardLimit: 2
@@ -1746,13 +2297,31 @@ async function main() {
     }
 
     for (const activity of activities) {
+      validateFlavor(activity.code, activity.rewardConfig);
       if (hasAuthoredInteraction(activity.rewardConfig)) {
-        validateAuthoredInteraction(
-          activity.code,
-          (activity.rewardConfig as { interaction?: unknown }).interaction
-        );
+        const interaction = (activity.rewardConfig as { interaction?: unknown }).interaction;
+        validateAuthoredInteraction(activity.code, interaction);
+        validateAuthoredCopy(activity.code, interaction);
       }
     }
+
+    const widgetTemplateCounts = countWidgetTypeTemplates(activities);
+    const underusedWidgets = Object.entries(widgetTemplateCounts)
+      .filter(([type, count]) => type !== "ack" && (count ?? 0) < 2)
+      .map(([type]) => type);
+    if (underusedWidgets.length > 0) {
+      throw new Error(
+        `Activity seed must provide at least 2 templates for each playable widget type. Underused: ${underusedWidgets.join(", ")}`
+      );
+    }
+
+    const flavorCounts = activities.reduce<Record<string, number>>((counts, activity) => {
+      const flavor = (activity.rewardConfig as { flavor?: string }).flavor;
+      if (flavor) {
+        counts[flavor] = (counts[flavor] ?? 0) + 1;
+      }
+      return counts;
+    }, {});
 
     console.log(
       JSON.stringify(
@@ -1768,7 +2337,9 @@ async function main() {
           activityCategories: categoryCounts,
           authoredInteractionCategories: authoredInteractionCounts,
           authoredInteractions: authoredTotal,
-          authoredPresentations: activities.length
+          authoredPresentations: activities.length,
+          widgetTemplateCounts,
+          flavorCounts
         },
         null,
         2
