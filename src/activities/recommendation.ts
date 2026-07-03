@@ -1,4 +1,4 @@
-import type { ActivityCategory } from "@prisma/client";
+import type { ActivityCategory, ActivityFeedbackType } from "@prisma/client";
 
 export const canonicalActivityCategories = [
   "rest",
@@ -10,16 +10,26 @@ export const canonicalActivityCategories = [
 
 export type CanonicalActivityCategory = (typeof canonicalActivityCategories)[number];
 
+export type ActivityInteractionSignalSummary = {
+  estimatedSeconds: number;
+  hasTimer: boolean;
+  hasMiniGame: boolean;
+  hasChoice?: boolean;
+  hasTapPattern?: boolean;
+  hasShufflePick?: boolean;
+  hasSort?: boolean;
+  hasBreath?: boolean;
+  hasReaction?: boolean;
+  hasMicroJournal?: boolean;
+  hasReveal?: boolean;
+};
+
 export type RecommendationCandidate<T> = {
   value: T;
   category: CanonicalActivityCategory;
   eligible: boolean;
   difficulty?: string;
-  interactionSummary?: {
-    estimatedSeconds: number;
-    hasTimer: boolean;
-    hasMiniGame: boolean;
-  };
+  interactionSummary?: ActivityInteractionSignalSummary;
   completedCount: number;
   categoryCompletionCount: number;
   lastUsedAt: Date | null;
@@ -35,10 +45,28 @@ export const activitySkipReasons = [
 
 export type ActivitySkipReason = (typeof activitySkipReasons)[number];
 
+export type ActivityFeedbackSignal = {
+  templateId: string;
+  category: CanonicalActivityCategory;
+  feedbackType: ActivityFeedbackType;
+  createdAt: Date;
+};
+
+export type RecommendationReason =
+  | "PREFERRED_CATEGORY"
+  | "TRY_SOMETHING_NEW"
+  | "MATCHES_HISTORY"
+  | "AVAILABLE_NOW"
+  | "LIKED_CATEGORY"
+  | "SHORTER_AFTER_FEEDBACK"
+  | "WEIRDER_AFTER_FEEDBACK"
+  | "AVOIDED_RECENT_DISLIKE"
+  | "AVOIDED_PHYSICAL";
+
 export type RecommendationResult<T> = {
   value: T;
   score: number;
-  reason: "PREFERRED_CATEGORY" | "TRY_SOMETHING_NEW" | "MATCHES_HISTORY" | "AVAILABLE_NOW";
+  reason: RecommendationReason;
 };
 
 export function explainActivityRecommendation(input: {
@@ -48,6 +76,21 @@ export function explainActivityRecommendation(input: {
 }): string {
   if (input.reason === "ACTIVE_ASSIGNMENT") {
     return "你已经有一个进行中的任务，先把这次摸鱼坐实。";
+  }
+  if (input.reason === "LIKED_CATEGORY") {
+    return "按你最近觉得有意思的类型推荐，手感应该更接近。";
+  }
+  if (input.reason === "SHORTER_AFTER_FEEDBACK") {
+    return "你最近想短一点，所以这次优先轻量快速完成。";
+  }
+  if (input.reason === "WEIRDER_AFTER_FEEDBACK") {
+    return "你最近想来点更怪的，所以这次偏脑洞和表演一点。";
+  }
+  if (input.reason === "AVOIDED_RECENT_DISLIKE") {
+    return "你最近不太想重复类似任务，所以这次换个方向。";
+  }
+  if (input.reason === "AVOIDED_PHYSICAL") {
+    return "你最近不想太折腾，所以这次少安排身体动作。";
   }
   if (input.recentSkipReasons?.includes("want_weirder")) {
     return "刚才你想来点怪的，所以这次偏脑洞和表演一点。";
@@ -101,15 +144,18 @@ export function recommendActivity<T>(
   options: {
     preferredCategory?: CanonicalActivityCategory;
     recentSkipReasons?: ActivitySkipReason[];
+    feedbackSignals?: ActivityFeedbackSignal[];
     now: Date;
     random?: () => number;
   }
 ): RecommendationResult<T> | null {
+  const feedbackSummary = summarizeFeedbackSignals(options.feedbackSignals ?? []);
   const scored = candidates
     .filter((candidate) => candidate.eligible)
     .map((candidate) => {
       let score = 10;
       let reason: RecommendationResult<T>["reason"] = "AVAILABLE_NOW";
+      let feedbackReason: RecommendationReason | null = null;
 
       if (candidate.category === options.preferredCategory) {
         score += 20;
@@ -165,10 +211,14 @@ export function recommendActivity<T>(
         }
       }
 
+      const feedbackScore = scoreFeedbackCandidate(candidate, feedbackSummary);
+      score += feedbackScore.score;
+      feedbackReason = feedbackScore.reason;
+
       return {
         value: candidate.value,
         score,
-        reason
+        reason: feedbackReason ?? reason
       };
     })
     .sort((left, right) => right.score - left.score);
@@ -180,4 +230,110 @@ export function recommendActivity<T>(
   const topBand = scored.filter((candidate) => candidate.score >= scored[0].score - 4);
   const random = options.random ?? Math.random;
   return topBand[Math.floor(random() * topBand.length)];
+}
+
+function summarizeFeedbackSignals(signals: ActivityFeedbackSignal[]) {
+  const likedCategories = new Map<CanonicalActivityCategory, number>();
+  const dislikedTemplates = new Set<string>();
+  const dislikedCategories = new Map<CanonicalActivityCategory, number>();
+  let wantsWeirder = 0;
+  let wantsShorterOrEasier = 0;
+  let avoidsPhysical = 0;
+
+  for (const signal of signals) {
+    if (signal.feedbackType === "liked") {
+      likedCategories.set(signal.category, (likedCategories.get(signal.category) ?? 0) + 1);
+    }
+    if (signal.feedbackType === "dislike_similar") {
+      dislikedTemplates.add(signal.templateId);
+      dislikedCategories.set(signal.category, (dislikedCategories.get(signal.category) ?? 0) + 1);
+    }
+    if (signal.feedbackType === "want_weirder") {
+      wantsWeirder += 1;
+    }
+    if (
+      signal.feedbackType === "too_much_work" ||
+      signal.feedbackType === "too_long" ||
+      signal.feedbackType === "shorter"
+    ) {
+      wantsShorterOrEasier += 1;
+    }
+    if (signal.feedbackType === "too_physical") {
+      avoidsPhysical += 1;
+    }
+  }
+
+  return {
+    likedCategories,
+    dislikedTemplates,
+    dislikedCategories,
+    wantsWeirder: Math.min(wantsWeirder, 3),
+    wantsShorterOrEasier: Math.min(wantsShorterOrEasier, 3),
+    avoidsPhysical: Math.min(avoidsPhysical, 3)
+  };
+}
+
+function scoreFeedbackCandidate<T>(
+  candidate: RecommendationCandidate<T>,
+  summary: ReturnType<typeof summarizeFeedbackSignals>
+): { score: number; reason: RecommendationReason | null } {
+  let score = 0;
+  let reason: RecommendationReason | null = null;
+  const interaction = candidate.interactionSummary;
+  const candidateId = templateIdForCandidate(candidate.value);
+  const likedCategoryCount = summary.likedCategories.get(candidate.category) ?? 0;
+  if (likedCategoryCount > 0) {
+    score += Math.min(likedCategoryCount, 3) * 8;
+    reason = "LIKED_CATEGORY";
+  }
+
+  if (candidateId && summary.dislikedTemplates.has(candidateId)) {
+    score -= 12;
+    reason = "AVOIDED_RECENT_DISLIKE";
+  }
+  const dislikedCategoryCount = summary.dislikedCategories.get(candidate.category) ?? 0;
+  if (dislikedCategoryCount > 0) {
+    score -= Math.min(dislikedCategoryCount, 2) * 6;
+    reason = "AVOIDED_RECENT_DISLIKE";
+  }
+
+  if (summary.wantsWeirder > 0) {
+    if (candidate.category === "imagination" || candidate.category === "office_theater") {
+      score += summary.wantsWeirder * 12;
+      reason = "WEIRDER_AFTER_FEEDBACK";
+    } else if (interaction?.hasChoice || interaction?.hasReveal || interaction?.hasShufflePick) {
+      score += summary.wantsWeirder * 4;
+      reason = "WEIRDER_AFTER_FEEDBACK";
+    }
+  }
+
+  if (summary.wantsShorterOrEasier > 0) {
+    if (candidate.difficulty === "hard" || (interaction?.estimatedSeconds ?? 0) > 60 || interaction?.hasTimer) {
+      score -= summary.wantsShorterOrEasier * 8;
+      reason = "SHORTER_AFTER_FEEDBACK";
+    } else if ((interaction?.estimatedSeconds ?? 0) > 0 && (interaction?.estimatedSeconds ?? 0) < 45) {
+      score += summary.wantsShorterOrEasier * 5;
+      reason = "SHORTER_AFTER_FEEDBACK";
+    }
+  }
+
+  if (summary.avoidsPhysical > 0) {
+    if (candidate.category === "physical") {
+      score -= summary.avoidsPhysical * 10;
+      reason = "AVOIDED_PHYSICAL";
+    } else if (interaction?.hasTimer || interaction?.hasTapPattern || interaction?.hasReaction) {
+      score -= summary.avoidsPhysical * 4;
+      reason = "AVOIDED_PHYSICAL";
+    }
+  }
+
+  return { score, reason };
+}
+
+function templateIdForCandidate(value: unknown): string | null {
+  if (!value || typeof value !== "object" || !("id" in value)) {
+    return null;
+  }
+  const id = (value as { id?: unknown }).id;
+  return typeof id === "string" ? id : null;
 }

@@ -1017,6 +1017,56 @@ components:
     ActivitySkipReason:
       type: string
       enum: [too_much_work, not_interested, not_convenient, want_weirder, other]
+    ActivityFeedbackType:
+      type: string
+      enum: [liked, neutral, dislike_similar, want_weirder, too_much_work, too_long, too_physical, shorter]
+    ActivityFeedbackSource:
+      type: string
+      enum: [completion, skip]
+    ActivityFeedbackRequest:
+      type: object
+      additionalProperties: false
+      required: [feedbackType, source]
+      properties:
+        feedbackType:
+          $ref: "#/components/schemas/ActivityFeedbackType"
+        source:
+          $ref: "#/components/schemas/ActivityFeedbackSource"
+    ActivityFeedbackEvent:
+      type: object
+      required: [id, assignmentId, templateId, category, feedbackType, feedbackSource, skipReason, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assignmentId:
+          type: [string, "null"]
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        category:
+          type: string
+          enum: [rest, game, office_theater, physical, imagination]
+        feedbackType:
+          $ref: "#/components/schemas/ActivityFeedbackType"
+        feedbackSource:
+          $ref: "#/components/schemas/ActivityFeedbackSource"
+        skipReason:
+          anyOf:
+            - $ref: "#/components/schemas/ActivitySkipReason"
+            - type: "null"
+        createdAt:
+          type: string
+          format: date-time
+    ActivityFeedbackResponse:
+      type: object
+      required: [acknowledgement, event]
+      properties:
+        acknowledgement:
+          type: string
+        event:
+          $ref: "#/components/schemas/ActivityFeedbackEvent"
     ActivityPresentation:
       type: object
       required: [badge, tone, accentColor, headline, scene, prompt, statLabel, statValue]
@@ -1087,7 +1137,7 @@ components:
           type: boolean
         recommendationReason:
           type: string
-          enum: [PREFERRED_CATEGORY, TRY_SOMETHING_NEW, MATCHES_HISTORY, AVAILABLE_NOW, ACTIVE_ASSIGNMENT]
+          enum: [PREFERRED_CATEGORY, TRY_SOMETHING_NEW, MATCHES_HISTORY, AVAILABLE_NOW, ACTIVE_ASSIGNMENT, LIKED_CATEGORY, SHORTER_AFTER_FEEDBACK, WEIRDER_AFTER_FEEDBACK, AVOIDED_RECENT_DISLIKE, AVOIDED_PHYSICAL]
         recommendationExplanation:
           type: string
     ActivityCatalogItem:
@@ -1757,6 +1807,42 @@ paths:
           description: Activity assignment not found
         "409":
           description: Activity expired or interaction incomplete
+  /v1/activities/{assignmentId}/feedback:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: assignmentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivityFeedbackRequest"
+      responses:
+        "200":
+          description: Activity feedback acknowledgement
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/ActivityFeedbackResponse"
+                  error:
+                    type: "null"
+        "400":
+          description: Invalid feedback type or source
+        "404":
+          description: Activity assignment not found
+        "409":
+          description: Assignment is not completed or skipped
   /v1/activities/{assignmentId}/skip:
     post:
       security:

@@ -2,6 +2,8 @@ import {
   ActivityAssignmentStatus,
   ActivityCategory,
   ActivityDifficulty,
+  ActivityFeedbackSource,
+  ActivityFeedbackType,
   RewardSourceType,
   RewardType
 } from "@prisma/client";
@@ -395,6 +397,14 @@ describe("activity routes", () => {
       rewarded: false
     });
     expect(store.rewardLedger).toHaveLength(0);
+    expect(store.feedbackEvents).toEqual([
+      expect.objectContaining({
+        assignmentId: assignment.id,
+        feedbackType: ActivityFeedbackType.dislike_similar,
+        feedbackSource: ActivityFeedbackSource.skip,
+        skipReason: "not_interested"
+      })
+    ]);
     expect(store.auditEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -403,6 +413,172 @@ describe("activity routes", () => {
         })
       ])
     );
+
+    await server.close();
+  });
+
+  it("stores completion feedback for an owned completed activity", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload: { feedbackType: "liked", source: "completion" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      acknowledgement: expect.any(String),
+      event: {
+        assignmentId: assignment.id,
+        templateId,
+        category: "game",
+        feedbackType: "liked",
+        feedbackSource: "completion",
+        skipReason: null,
+        createdAt: expect.any(String)
+      }
+    });
+    expect(store.feedbackEvents).toHaveLength(1);
+    expect(store.feedbackEvents[0]).toMatchObject({
+      userId,
+      assignmentId: assignment.id,
+      feedbackType: ActivityFeedbackType.liked,
+      feedbackSource: ActivityFeedbackSource.completion,
+      skipReason: null
+    });
+
+    await server.close();
+  });
+
+  it("rejects invalid feedback type without storing an event", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload: { feedbackType: "unknown", source: "completion" }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(store.feedbackEvents).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("does not let a user submit feedback for another user's activity", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId: otherUserId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload: { feedbackType: "liked", source: "completion" }
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe("ACTIVITY_NOT_FOUND");
+    expect(store.feedbackEvents).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("rejects feedback for an active assignment", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload: { feedbackType: "liked", source: "completion" }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("ACTIVITY_FEEDBACK_NOT_READY");
+    expect(store.feedbackEvents).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("keeps repeated identical feedback idempotent", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const payload = { feedbackType: "liked", source: "completion" };
+    const first = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload
+    });
+    const second = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.event.id).toBe(first.json().data.event.id);
+    expect(store.feedbackEvents).toHaveLength(1);
+
+    await server.close();
+  });
+  it("returns feedback-aware recommendation explanations when feedback is relevant", async () => {
+    const server = await buildTestServer(store);
+    store.addTemplate(imaginationTemplate());
+    store.feedbackEvents.push({
+      id: "66666666-6666-4666-8666-000000000001",
+      userId,
+      assignmentId: null,
+      templateId,
+      category: ActivityCategory.game,
+      feedbackType: ActivityFeedbackType.want_weirder,
+      feedbackSource: ActivityFeedbackSource.completion,
+      skipReason: null,
+      interactionTypes: [],
+      metadata: {},
+      createdAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/activities/random",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      recommendationReason: "WEIRDER_AFTER_FEEDBACK",
+      recommendationExplanation: "你最近想来点更怪的，所以这次偏脑洞和表演一点。"
+    });
 
     await server.close();
   });
@@ -475,6 +651,21 @@ function gameInteractionProgress() {
         mini_game: { passed: true, score: 3 }
       }
     }
+  };
+}
+
+function imaginationTemplate() {
+  return {
+    id: "77777777-7777-4777-8777-777777777777",
+    code: "daydream_cloud",
+    title: "给云取一个工位名",
+    description: "给不存在的云同事起一个合理名字。",
+    category: ActivityCategory.imagination,
+    difficulty: ActivityDifficulty.easy,
+    rewardConfig: { score: 4, drawProgress: 1 },
+    cooldownSeconds: 0,
+    dailyRewardLimit: 3,
+    active: true
   };
 }
 
@@ -572,6 +763,20 @@ type TestAssignment = {
   template: TestTemplate;
 };
 
+type TestFeedbackEvent = {
+  id: string;
+  userId: string;
+  assignmentId: string | null;
+  templateId: string;
+  category: ActivityCategory;
+  feedbackType: ActivityFeedbackType;
+  feedbackSource: ActivityFeedbackSource;
+  skipReason: string | null;
+  interactionTypes: unknown;
+  metadata: unknown;
+  createdAt: Date;
+};
+
 function createStore() {
   let nextAssignmentId = 1;
   const template: TestTemplate = {
@@ -586,19 +791,27 @@ function createStore() {
     dailyRewardLimit: 1,
     active: true
   };
+  const templates: TestTemplate[] = [template];
   const assignments: TestAssignment[] = [];
   const stats = new Map<string, { userId: string; drawProgress: number; drawChances: number }>();
   const rewardLedger: Array<Record<string, unknown>> = [];
   const leaderboardScores: Array<Record<string, unknown>> = [];
   const auditEvents: Array<Record<string, unknown>> = [];
+  const feedbackEvents: TestFeedbackEvent[] = [];
 
   return {
     template,
+    templates,
     assignments,
+    addTemplate(input: TestTemplate) {
+      templates.push(input);
+      return input;
+    },
     stats,
     rewardLedger,
     leaderboardScores,
     auditEvents,
+    feedbackEvents,
     addAssignment(input: {
       userId: string;
       status?: ActivityAssignmentStatus;
@@ -630,7 +843,7 @@ function createStore() {
 function createPrismaMock(store: TestStore) {
   const prisma: Record<string, unknown> = {
     activityTemplate: {
-      findMany: async () => [store.template]
+      findMany: async () => store.templates
     },
     activityAssignment: {
       findFirst: async ({ where }: { where: { userId: string; status: ActivityAssignmentStatus } }) =>
@@ -744,6 +957,61 @@ function createPrismaMock(store: TestStore) {
     },
     beanInventory: {
       count: async () => 0
+    },
+    activityFeedbackEvent: {
+      upsert: async ({
+        where,
+        create
+      }: {
+        where: {
+          userId_assignmentId_feedbackType_feedbackSource: {
+            userId: string;
+            assignmentId: string;
+            feedbackType: ActivityFeedbackType;
+            feedbackSource: ActivityFeedbackSource;
+          };
+        };
+        create: Omit<TestFeedbackEvent, "id" | "createdAt">;
+        update: Record<string, never>;
+      }) => {
+        const key = where.userId_assignmentId_feedbackType_feedbackSource;
+        const existing = store.feedbackEvents.find(
+          (event) =>
+            event.userId === key.userId &&
+            event.assignmentId === key.assignmentId &&
+            event.feedbackType === key.feedbackType &&
+            event.feedbackSource === key.feedbackSource
+        );
+        if (existing) {
+          return existing;
+        }
+        const event: TestFeedbackEvent = {
+          ...create,
+          id: `66666666-6666-4666-8666-${String(store.feedbackEvents.length + 1).padStart(12, "0")}`,
+          createdAt: new Date()
+        };
+        store.feedbackEvents.push(event);
+        return event;
+      },
+      findMany: async ({
+        where,
+        orderBy,
+        take
+      }: {
+        where: { userId: string; createdAt?: { gte: Date } };
+        orderBy?: { createdAt: "desc" };
+        take?: number;
+      }) => {
+        const events = store.feedbackEvents.filter(
+          (event) =>
+            event.userId === where.userId &&
+            (!where.createdAt || event.createdAt >= where.createdAt.gte)
+        );
+        if (orderBy?.createdAt === "desc") {
+          events.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+        }
+        return events.slice(0, take);
+      }
     },
     auditEvent: {
       findMany: async ({

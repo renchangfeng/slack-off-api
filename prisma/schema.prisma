@@ -94,6 +94,22 @@ enum ActivityAssignmentStatus {
   expired
 }
 
+enum ActivityFeedbackType {
+  liked
+  neutral
+  dislike_similar
+  want_weirder
+  too_much_work
+  too_long
+  too_physical
+  shorter
+}
+
+enum ActivityFeedbackSource {
+  completion
+  skip
+}
+
 enum SocialReactionType {
   tissue
   like
@@ -117,7 +133,8 @@ model User {
   beanInventory       BeanInventory[]
   achievements        UserAchievement[]
   cosmetics           UserCosmetic[]
-  activityAssignments ActivityAssignment[]
+  activityAssignments  ActivityAssignment[]
+  activityFeedbackEvents ActivityFeedbackEvent[]
   progressionPeriods  ProgressionGoalPeriod[]
   beanShowcase        BeanShowcase[]
   actorAuditEvents    AuditEvent[]         @relation("AuditActor")
@@ -395,17 +412,18 @@ model UserCosmetic {
 }
 
 model ActivityTemplate {
-  id               String               @id @default(uuid()) @db.Uuid
-  code             String               @unique
+  id               String                  @id @default(uuid()) @db.Uuid
+  code             String                  @unique
   title            String
   description      String
   category         ActivityCategory
   difficulty       ActivityDifficulty
-  rewardConfig     Json                 @map("reward_config")
-  cooldownSeconds  Int                  @map("cooldown_seconds")
-  dailyRewardLimit Int                  @map("daily_reward_limit")
-  active           Boolean              @default(true)
+  rewardConfig     Json                    @map("reward_config")
+  cooldownSeconds  Int                     @map("cooldown_seconds")
+  dailyRewardLimit Int                     @map("daily_reward_limit")
+  active           Boolean                 @default(true)
   assignments      ActivityAssignment[]
+  feedbackEvents   ActivityFeedbackEvent[]
 
   @@map("activity_templates")
 }
@@ -422,9 +440,33 @@ model ActivityAssignment {
   idempotencyKey String?                  @unique @map("idempotency_key")
   user           User                     @relation(fields: [userId], references: [id])
   template       ActivityTemplate         @relation(fields: [templateId], references: [id])
+  feedbackEvents ActivityFeedbackEvent[]
 
   @@index([userId, status])
   @@map("activity_assignments")
+}
+
+model ActivityFeedbackEvent {
+  id               String                 @id @default(uuid()) @db.Uuid
+  userId           String                 @map("user_id") @db.Uuid
+  assignmentId     String?                @map("assignment_id") @db.Uuid
+  templateId       String                 @map("template_id") @db.Uuid
+  category         ActivityCategory
+  feedbackType     ActivityFeedbackType   @map("feedback_type")
+  feedbackSource   ActivityFeedbackSource @map("feedback_source")
+  skipReason       String?                @map("skip_reason")
+  interactionTypes Json                   @map("interaction_types")
+  metadata         Json
+  createdAt        DateTime               @default(now()) @map("created_at")
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignment       ActivityAssignment?    @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  template         ActivityTemplate       @relation(fields: [templateId], references: [id])
+
+  @@unique([userId, assignmentId, feedbackType, feedbackSource])
+  @@index([userId, createdAt])
+  @@index([userId, templateId, createdAt])
+  @@index([userId, category, createdAt])
+  @@map("activity_feedback_events")
 }
 
 model ProgressionGoalPeriod {

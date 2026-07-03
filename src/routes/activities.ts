@@ -1,5 +1,7 @@
 import {
   ActivityAssignmentStatus,
+  ActivityFeedbackSource,
+  ActivityFeedbackType,
   RewardSourceType,
   RewardType,
   type ActivityCategory,
@@ -26,12 +28,43 @@ import {
   isCanonicalActivityCategory,
   normalizeActivityCategory,
   recommendActivity,
+  type ActivityFeedbackSignal,
   type ActivitySkipReason,
   type CanonicalActivityCategory
 } from "../activities/recommendation.js";
 import { fail, ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
 import { incrementLeaderboardScores } from "./leaderboards.js";
+
+const activityFeedbackTypes = [
+  ActivityFeedbackType.liked,
+  ActivityFeedbackType.neutral,
+  ActivityFeedbackType.dislike_similar,
+  ActivityFeedbackType.want_weirder,
+  ActivityFeedbackType.too_much_work,
+  ActivityFeedbackType.too_long,
+  ActivityFeedbackType.too_physical,
+  ActivityFeedbackType.shorter
+] as const;
+
+const activityFeedbackSources = [
+  ActivityFeedbackSource.completion,
+  ActivityFeedbackSource.skip
+] as const;
+
+type ActivityFeedbackResponse = {
+  acknowledgement: string;
+  event: {
+    id: string;
+    assignmentId: string | null;
+    templateId: string;
+    category: CanonicalActivityCategory;
+    feedbackType: ActivityFeedbackType;
+    feedbackSource: ActivityFeedbackSource;
+    skipReason: ActivitySkipReason | null;
+    createdAt: string;
+  };
+};
 
 type RewardConfig = {
   score?: number;
@@ -166,6 +199,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
 
       const states = await buildActivityStates(server, request.user!.id, templates, now);
       const recentSkipReasons = await loadRecentSkipReasons(server, request.user!.id);
+      const feedbackSignals = await loadRecentFeedbackSignals(server, request.user!.id, now);
       const recommendation = recommendActivity(states.map((state) => ({
         value: state.template,
         category: state.category,
@@ -178,6 +212,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       })), {
         preferredCategory,
         recentSkipReasons,
+        feedbackSignals,
         now
       });
       if (!recommendation) {
@@ -451,6 +486,78 @@ export async function registerActivityRoutes(server: FastifyInstance) {
   );
 
   server.post(
+    "/v1/activities/:assignmentId/feedback",
+    {
+      ...rateLimitFor(server, "activities"),
+      preHandler: [server.requireAuth],
+      schema: {
+        params: {
+          type: "object",
+          required: ["assignmentId"],
+          properties: {
+            assignmentId: { type: "string", format: "uuid" }
+          }
+        },
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["feedbackType", "source"],
+          properties: {
+            feedbackType: { type: "string", enum: activityFeedbackTypes },
+            source: { type: "string", enum: activityFeedbackSources }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const params = request.params as { assignmentId: string };
+      const body = request.body as {
+        feedbackType: ActivityFeedbackType;
+        source: ActivityFeedbackSource;
+      };
+      const assignment = await server.prisma.activityAssignment.findUnique({
+        where: { id: params.assignmentId },
+        include: { template: true }
+      });
+
+      if (!assignment || assignment.userId !== request.user?.id) {
+        return reply
+          .code(404)
+          .send(fail("ACTIVITY_NOT_FOUND", "Activity assignment not found", request.trace));
+      }
+
+      if (
+        assignment.status !== ActivityAssignmentStatus.completed &&
+        assignment.status !== ActivityAssignmentStatus.skipped
+      ) {
+        return reply
+          .code(409)
+          .send(fail("ACTIVITY_FEEDBACK_NOT_READY", "Feedback is only available after completion or skip", request.trace));
+      }
+
+      if (
+        (assignment.status === ActivityAssignmentStatus.completed && body.source !== ActivityFeedbackSource.completion) ||
+        (assignment.status === ActivityAssignmentStatus.skipped && body.source !== ActivityFeedbackSource.skip)
+      ) {
+        return reply
+          .code(400)
+          .send(fail("ACTIVITY_FEEDBACK_SOURCE_MISMATCH", "Feedback source does not match assignment status", request.trace));
+      }
+
+      const response = await saveActivityFeedbackEvent(server, {
+        userId: request.user!.id,
+        assignment,
+        feedbackType: body.feedbackType,
+        feedbackSource: body.source,
+        skipReason: null,
+        trace: request.trace
+      });
+
+      return ok(response);
+    }
+  );
+
+  server.post(
     "/v1/activities/:assignmentId/skip",
     {
       ...rateLimitFor(server, "activities"),
@@ -508,9 +615,157 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         trace: request.trace
       });
 
+      if (reason) {
+        await saveActivityFeedbackEvent(server, {
+          userId: request.user!.id,
+          assignment: { ...assignment, ...skipped },
+          feedbackType: feedbackTypeForSkipReason(reason, assignment),
+          feedbackSource: ActivityFeedbackSource.skip,
+          skipReason: reason,
+          trace: request.trace
+        });
+      }
+
       return ok(serializeAssignment({ ...assignment, ...skipped }));
     }
   );
+}
+
+async function saveActivityFeedbackEvent(
+  server: FastifyInstance,
+  input: {
+    userId: string;
+    assignment: {
+      id: string;
+      templateId: string;
+      template: ActivityTemplate;
+    };
+    feedbackType: ActivityFeedbackType;
+    feedbackSource: ActivityFeedbackSource;
+    skipReason: ActivitySkipReason | null;
+    trace: { requestId: string; traceId: string; spanId: string };
+  }
+): Promise<ActivityFeedbackResponse> {
+  const interaction = buildActivityInteraction(input.assignment.template);
+  const summary = summarizeActivityInteraction(interaction);
+  const event = await server.prisma.activityFeedbackEvent.upsert({
+    where: {
+      userId_assignmentId_feedbackType_feedbackSource: {
+        userId: input.userId,
+        assignmentId: input.assignment.id,
+        feedbackType: input.feedbackType,
+        feedbackSource: input.feedbackSource
+      }
+    },
+    create: {
+      userId: input.userId,
+      assignmentId: input.assignment.id,
+      templateId: input.assignment.templateId,
+      category: input.assignment.template.category,
+      feedbackType: input.feedbackType,
+      feedbackSource: input.feedbackSource,
+      skipReason: input.skipReason,
+      interactionTypes: interaction.steps.map((step) => step.type),
+      metadata: {
+        templateCode: input.assignment.template.code,
+        difficulty: input.assignment.template.difficulty,
+        interactionSummary: summary,
+        requestId: input.trace.requestId,
+        traceId: input.trace.traceId,
+        spanId: input.trace.spanId
+      }
+    },
+    update: {}
+  });
+
+  return serializeFeedbackEvent(event, acknowledgementForFeedback(input.feedbackType));
+}
+
+function serializeFeedbackEvent(
+  event: {
+    id: string;
+    assignmentId: string | null;
+    templateId: string;
+    category: ActivityCategory;
+    feedbackType: ActivityFeedbackType;
+    feedbackSource: ActivityFeedbackSource;
+    skipReason: string | null;
+    createdAt: Date;
+  },
+  acknowledgement: string
+): ActivityFeedbackResponse {
+  return {
+    acknowledgement,
+    event: {
+      id: event.id,
+      assignmentId: event.assignmentId,
+      templateId: event.templateId,
+      category: normalizeActivityCategory(event.category),
+      feedbackType: event.feedbackType,
+      feedbackSource: event.feedbackSource,
+      skipReason: activitySkipReasons.includes(event.skipReason as ActivitySkipReason)
+        ? (event.skipReason as ActivitySkipReason)
+        : null,
+      createdAt: event.createdAt.toISOString()
+    }
+  };
+}
+
+function acknowledgementForFeedback(feedbackType: ActivityFeedbackType): string {
+  return {
+    [ActivityFeedbackType.liked]: "收到，下次多安排这种手感的摸鱼。",
+    [ActivityFeedbackType.neutral]: "收到，保持轻量，不打扰你继续摸鱼。",
+    [ActivityFeedbackType.dislike_similar]: "收到，近期会少推荐类似任务。",
+    [ActivityFeedbackType.want_weirder]: "收到，下次可以稍微怪一点。",
+    [ActivityFeedbackType.too_much_work]: "收到，下次尽量轻一点。",
+    [ActivityFeedbackType.too_long]: "收到，下次优先短一点。",
+    [ActivityFeedbackType.too_physical]: "收到，下次少安排需要动太多的任务。",
+    [ActivityFeedbackType.shorter]: "收到，下次优先更短的摸鱼。"
+  }[feedbackType];
+}
+
+function feedbackTypeForSkipReason(
+  reason: ActivitySkipReason,
+  assignment: { template: ActivityTemplate }
+): ActivityFeedbackType {
+  if (reason === "too_much_work") {
+    return ActivityFeedbackType.too_much_work;
+  }
+  if (reason === "not_interested") {
+    return ActivityFeedbackType.dislike_similar;
+  }
+  if (reason === "want_weirder") {
+    return ActivityFeedbackType.want_weirder;
+  }
+  if (reason === "not_convenient") {
+    const interaction = summarizeActivityInteraction(buildActivityInteraction(assignment.template));
+    return normalizeActivityCategory(assignment.template.category) === "physical" || interaction.hasTimer
+      ? ActivityFeedbackType.too_physical
+      : ActivityFeedbackType.too_long;
+  }
+  return ActivityFeedbackType.neutral;
+}
+async function loadRecentFeedbackSignals(
+  server: FastifyInstance,
+  userId: string,
+  now: Date
+): Promise<ActivityFeedbackSignal[]> {
+  const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const events = await server.prisma.activityFeedbackEvent.findMany({
+    where: {
+      userId,
+      createdAt: { gte: since }
+    },
+    orderBy: { createdAt: "desc" },
+    take: 50
+  });
+
+  return events.map((event) => ({
+    templateId: event.templateId,
+    category: normalizeActivityCategory(event.category),
+    feedbackType: event.feedbackType,
+    createdAt: event.createdAt
+  }));
 }
 
 async function loadRecentSkipReasons(

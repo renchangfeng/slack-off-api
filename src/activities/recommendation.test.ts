@@ -1,3 +1,4 @@
+import { ActivityFeedbackType } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { normalizeActivityCategory, recommendActivity } from "./recommendation.js";
 
@@ -83,10 +84,138 @@ describe("activity recommendations", () => {
 
     expect(result?.value).toBe("weird");
   });
+  it("boosts categories the user recently liked", () => {
+    const result = recommendActivity(
+      [
+        candidate("rest", { category: "rest", completedCount: 1 }),
+        candidate("game", { category: "game", completedCount: 1 })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("liked-rest", "rest", ActivityFeedbackType.liked)],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: "rest",
+      reason: "LIKED_CATEGORY"
+    });
+  });
+
+  it("penalizes the same template and category after dislike similar feedback", () => {
+    const result = recommendActivity(
+      [
+        candidate({ id: "template-a", label: "same" }, { category: "rest", completedCount: 1 }),
+        candidate({ id: "template-b", label: "other" }, { category: "game", completedCount: 1 })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("template-a", "rest", ActivityFeedbackType.dislike_similar)],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: { id: "template-b", label: "other" },
+      reason: "AVAILABLE_NOW"
+    });
+  });
+
+  it("uses want weirder feedback to boost imagination and office theater", () => {
+    const result = recommendActivity(
+      [
+        candidate("rest", { category: "rest", completedCount: 1 }),
+        candidate("weird", { category: "imagination", completedCount: 1 })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("old", "rest", ActivityFeedbackType.want_weirder)],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: "weird",
+      reason: "WEIRDER_AFTER_FEEDBACK"
+    });
+  });
+
+  it("prefers shorter easier activities after duration feedback", () => {
+    const result = recommendActivity(
+      [
+        candidate("long", {
+          category: "rest",
+          completedCount: 1,
+          difficulty: "hard",
+          interactionSummary: { estimatedSeconds: 90, hasTimer: true, hasMiniGame: false }
+        }),
+        candidate("short", {
+          category: "game",
+          completedCount: 1,
+          difficulty: "easy",
+          interactionSummary: { estimatedSeconds: 30, hasTimer: false, hasMiniGame: false }
+        })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("old", "rest", ActivityFeedbackType.shorter)],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: "short",
+      reason: "SHORTER_AFTER_FEEDBACK"
+    });
+  });
+
+  it("avoids physical activities after too physical feedback", () => {
+    const result = recommendActivity(
+      [
+        candidate("stretch", { category: "physical", completedCount: 1 }),
+        candidate("quiet", { category: "rest", completedCount: 1 })
+      ],
+      {
+        now,
+        feedbackSignals: [feedback("old", "physical", ActivityFeedbackType.too_physical)],
+        random: () => 0
+      }
+    );
+
+    expect(result).toMatchObject({
+      value: "quiet",
+      reason: "AVAILABLE_NOW"
+    });
+  });
+
+  it("keeps existing fallback behavior without feedback", () => {
+    const result = recommendActivity(
+      [candidate("new", { completedCount: 0 }), candidate("old", { completedCount: 3 })],
+      { now, random: () => 0 }
+    );
+
+    expect(result).toMatchObject({
+      value: "new",
+      reason: "TRY_SOMETHING_NEW"
+    });
+  });
 });
 
+function feedback(
+  templateId: string,
+  category: "rest" | "game" | "office_theater" | "physical" | "imagination",
+  feedbackType: ActivityFeedbackType
+) {
+  return {
+    templateId,
+    category,
+    feedbackType,
+    createdAt: now
+  };
+}
 function candidate(
-  value: string,
+  value: string | { id: string; label: string },
   overrides: Partial<{
     category: "rest" | "game" | "office_theater" | "physical" | "imagination";
     eligible: boolean;
