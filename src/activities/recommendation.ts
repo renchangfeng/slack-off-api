@@ -90,6 +90,7 @@ export type RecommendationReason =
   | "AVAILABLE_NOW"
   | "LIKED_CATEGORY"
   | "LIKED_FLAVOR"
+  | "SIMILAR_FLAVOR"
   | "SHORTER_AFTER_FEEDBACK"
   | "WEIRDER_AFTER_FEEDBACK"
   | "AVOIDED_RECENT_DISLIKE"
@@ -116,6 +117,9 @@ export function explainActivityRecommendation(input: {
   }
   if (input.reason === "LIKED_FLAVOR" && input.flavor) {
     return `按你最近偏好的${flavorLabel(input.flavor)}风格推荐，应该更对你的口味。`;
+  }
+  if (input.reason === "SIMILAR_FLAVOR" && input.flavor) {
+    return `按你想要的${flavorLabel(input.flavor)}风格推荐一个类似的。`;
   }
   if (input.reason === "SHORTER_AFTER_FEEDBACK") {
     return "你最近想短一点，所以这次优先轻量快速完成。";
@@ -180,6 +184,8 @@ export function recommendActivity<T>(
   candidates: RecommendationCandidate<T>[],
   options: {
     preferredCategory?: CanonicalActivityCategory;
+    preferredFlavor?: ActivityFlavor;
+    excludeTemplateId?: string;
     recentSkipReasons?: ActivitySkipReason[];
     feedbackSignals?: ActivityFeedbackSignal[];
     now: Date;
@@ -189,6 +195,7 @@ export function recommendActivity<T>(
   const feedbackSummary = summarizeFeedbackSignals(options.feedbackSignals ?? []);
   const scored = candidates
     .filter((candidate) => candidate.eligible)
+    .filter((candidate) => !options.excludeTemplateId || templateIdForCandidate(candidate.value) !== options.excludeTemplateId)
     .map((candidate) => {
       let score = 10;
       let reason: RecommendationResult<T>["reason"] = "AVAILABLE_NOW";
@@ -197,6 +204,13 @@ export function recommendActivity<T>(
       if (candidate.category === options.preferredCategory) {
         score += 20;
         reason = "PREFERRED_CATEGORY";
+      }
+
+      if (options.preferredFlavor && candidate.flavor === options.preferredFlavor) {
+        score += 15;
+        if (reason === "AVAILABLE_NOW") {
+          reason = "SIMILAR_FLAVOR";
+        }
       }
 
       if (candidate.completedCount === 0) {

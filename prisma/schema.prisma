@@ -443,6 +443,7 @@ model ActivityAssignment {
   feedbackEvents ActivityFeedbackEvent[]
 
   @@index([userId, status])
+  @@index([userId, status, assignedAt])
   @@map("activity_assignments")
 }
 

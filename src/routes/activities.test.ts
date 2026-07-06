@@ -177,7 +177,7 @@ describe("activity routes", () => {
       code: "match_three_rounds",
       category: "game",
       status: "completed",
-      rewarded: true
+      rewardSummary: { score: 8, drawProgress: 1, rewarded: true }
     });
 
     await server.close();
@@ -641,6 +641,273 @@ describe("activity routes", () => {
 
     await server.close();
   });
+
+  it("returns private activity history ordered newest first", async () => {
+    const server = await buildTestServer(store);
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+    store.addAssignment({
+      userId: otherUserId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const items = response.json().data.items;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      assignmentId: expect.any(String),
+      status: ActivityAssignmentStatus.completed,
+      rewardSummary: { score: 8, drawProgress: 1, rewarded: true }
+    });
+
+    await server.close();
+  });
+
+  it("filters history by today window", async () => {
+    const server = await buildTestServer(store);
+    const today = new Date("2026-07-06T12:00:00.000Z");
+    const yesterday = new Date("2026-07-05T12:00:00.000Z");
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      assignedAt: today,
+      completedAt: today,
+      rewarded: true
+    });
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.skipped,
+      assignedAt: yesterday,
+      rewarded: false
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history?window=today",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.items).toHaveLength(1);
+    expect(response.json().data.items[0].status).toBe(ActivityAssignmentStatus.completed);
+
+    await server.close();
+  });
+
+  it("includes an activity assigned yesterday but completed today in today's history", async () => {
+    const server = await buildTestServer(store);
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      assignedAt: yesterday,
+      completedAt: today,
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history?window=today",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.items).toHaveLength(1);
+    expect(response.json().data.items[0].assignmentId).toBe(assignment.id);
+
+    await server.close();
+  });
+
+  it("returns presentation data that matches the public contract", async () => {
+    const server = await buildTestServer(store);
+    store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.items[0].presentation.prompt).toEqual(expect.any(String));
+
+    await server.close();
+  });
+
+  it("includes skip reason and no-reward state for skipped sessions", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.active,
+      rewarded: false
+    });
+    await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/skip`,
+      headers: { authorization: "Bearer test" },
+      payload: { reason: "want_weirder" }
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const item = response.json().data.items[0];
+    expect(item.status).toBe(ActivityAssignmentStatus.skipped);
+    expect(item.skipReason).toBe("want_weirder");
+    expect(item.rewardSummary.rewarded).toBe(false);
+    expect(item.replayHint.excludeTemplateId).toBe(assignment.templateId);
+
+    await server.close();
+  });
+
+  it("includes completion feedback acknowledgement in history", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+    await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/feedback`,
+      headers: { authorization: "Bearer test" },
+      payload: { feedbackType: "liked", source: "completion" }
+    });
+
+    const response = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const item = response.json().data.items[0];
+    expect(item.feedback).toMatchObject({
+      type: "liked",
+      acknowledgement: expect.any(String)
+    });
+
+    await server.close();
+  });
+
+  it("paginates history with cursor", async () => {
+    const server = await buildTestServer(store);
+    const now = new Date();
+    const first = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      assignedAt: now,
+      completedAt: now,
+      rewarded: true
+    });
+    const second = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      assignedAt: new Date(now.getTime() - 1000),
+      completedAt: new Date(now.getTime() - 1000),
+      rewarded: true
+    });
+
+    const firstPage = await server.inject({
+      method: "GET",
+      url: "/v1/activities/history?limit=1",
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(firstPage.statusCode).toBe(200);
+    expect(firstPage.json().data.items).toHaveLength(1);
+    expect(firstPage.json().data.items[0].assignmentId).toBe(first.id);
+    expect(firstPage.json().data.nextCursor).toBeTruthy();
+
+    const secondPage = await server.inject({
+      method: "GET",
+      url: `/v1/activities/history?limit=1&cursor=${encodeURIComponent(firstPage.json().data.nextCursor)}`,
+      headers: { authorization: "Bearer test" }
+    });
+
+    expect(secondPage.statusCode).toBe(200);
+    expect(secondPage.json().data.items).toHaveLength(1);
+    expect(secondPage.json().data.items[0].assignmentId).toBe(second.id);
+
+    await server.close();
+  });
+
+  it("replays similar activity without reactivating old assignment or duplicating rewards", async () => {
+    const server = await buildTestServer(store);
+    store.addTemplate(imaginationTemplate());
+    const original = store.addAssignment({
+      userId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/activities/random",
+      headers: { authorization: "Bearer test" },
+      payload: {
+        replayHint: { sourceAssignmentId: original.id }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const data = response.json().data;
+    expect(data.assignmentId).not.toBe(original.id);
+    expect(data.status).toBe(ActivityAssignmentStatus.active);
+    expect(data.templateId).not.toBe(original.templateId);
+    expect(store.assignments).toHaveLength(2);
+    expect(store.rewardLedger).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("ignores replay hint for non-owned assignment", async () => {
+    const server = await buildTestServer(store);
+    const original = store.addAssignment({
+      userId: otherUserId,
+      status: ActivityAssignmentStatus.completed,
+      completedAt: new Date(),
+      rewarded: true
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/activities/random",
+      headers: { authorization: "Bearer test" },
+      payload: {
+        replayHint: { sourceAssignmentId: original.id }
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.status).toBe(ActivityAssignmentStatus.active);
+
+    await server.close();
+  });
 });
 
 function gameInteractionProgress() {
@@ -852,23 +1119,88 @@ function createPrismaMock(store: TestStore) {
         ) ?? null,
       findMany: async ({
         where,
+        orderBy,
         take
       }: {
         where: {
           userId: string;
           templateId?: { in: string[] };
           status?: { in: ActivityAssignmentStatus[] };
+          assignedAt?: { gte?: Date; lt?: Date };
+          completedAt?: { gte?: Date; lt?: Date } | null;
+          OR?: Array<
+            | { completedAt: { gte?: Date; lt?: Date } }
+            | { completedAt: null; assignedAt: { gte?: Date; lt?: Date } }
+            | { assignedAt: { lt: Date } }
+            | { assignedAt: Date; id: { lt: string } }
+          >;
+          AND?: Array<{
+            OR?: Array<
+              | { assignedAt: { lt: Date } }
+              | { assignedAt: Date; id: { lt: string } }
+            >;
+          }>;
         };
+        orderBy?: Array<{ assignedAt: "desc" } | { id: "desc" }> | { assignedAt: "desc" };
         take?: number;
-      }) =>
-        store.assignments
-          .filter(
-            (assignment) =>
-              assignment.userId === where.userId &&
-              (!where.templateId || where.templateId.in.includes(assignment.templateId)) &&
-              (!where.status || where.status.in.includes(assignment.status))
-          )
-          .slice(0, take),
+      }) => {
+        const matchesWhere = (
+          assignment: TestAssignment,
+          condition: typeof where | NonNullable<typeof where.OR>[number] | NonNullable<typeof where.AND>[number]
+        ): boolean => {
+          if ("userId" in condition && assignment.userId !== condition.userId) return false;
+          if ("templateId" in condition && condition.templateId && !condition.templateId.in.includes(assignment.templateId)) return false;
+          if ("status" in condition && condition.status && !condition.status.in.includes(assignment.status)) return false;
+          if ("completedAt" in condition) {
+            if (condition.completedAt === null && assignment.completedAt !== null) return false;
+            if (condition.completedAt && assignment.completedAt === null) return false;
+            if (condition.completedAt?.gte && assignment.completedAt! < condition.completedAt.gte) return false;
+            if (condition.completedAt?.lt && assignment.completedAt! >= condition.completedAt.lt) return false;
+          }
+          if ("assignedAt" in condition) {
+            if (condition.assignedAt instanceof Date) {
+              if (assignment.assignedAt.getTime() !== condition.assignedAt.getTime()) return false;
+            } else {
+              const assignedAtRange = condition.assignedAt as { gte?: Date; lt?: Date };
+              if (assignedAtRange.gte && assignment.assignedAt < assignedAtRange.gte) return false;
+              if (assignedAtRange.lt && assignment.assignedAt >= assignedAtRange.lt) return false;
+            }
+          }
+          if ("id" in condition && condition.id && "lt" in condition.id && !(assignment.id < condition.id.lt)) return false;
+          if ("OR" in condition && condition.OR) {
+            if (!condition.OR.some((nested) => matchesWhere(assignment, nested))) return false;
+          }
+          if ("AND" in condition && condition.AND) {
+            if (!condition.AND.every((nested) => matchesWhere(assignment, nested))) return false;
+          }
+          return true;
+        };
+        let filtered = store.assignments.filter((assignment) => {
+          if (assignment.userId !== where.userId) return false;
+          if (where.templateId && !where.templateId.in.includes(assignment.templateId)) return false;
+          if (where.status && !where.status.in.includes(assignment.status)) return false;
+          if (where.assignedAt?.gte && assignment.assignedAt < where.assignedAt.gte) return false;
+          if (where.assignedAt?.lt && assignment.assignedAt >= where.assignedAt.lt) return false;
+          return matchesWhere(assignment, where);
+        });
+        const sortByAssignedAt = orderBy
+          ? Array.isArray(orderBy)
+            ? orderBy.find((item) => "assignedAt" in item)
+            : "assignedAt" in orderBy
+              ? orderBy
+              : undefined
+          : undefined;
+        if (sortByAssignedAt) {
+          const direction = (sortByAssignedAt.assignedAt as string) === "asc" ? 1 : -1;
+          filtered = filtered.slice().sort((left, right) => {
+            const timeDiff =
+              direction * (left.assignedAt.getTime() - right.assignedAt.getTime());
+            if (timeDiff !== 0) return timeDiff;
+            return direction * (left.id < right.id ? -1 : 1);
+          });
+        }
+        return take ? filtered.slice(0, take) : filtered;
+      },
       findUnique: async ({ where }: { where: { id: string } }) =>
         store.assignments.find((assignment) => assignment.id === where.id) ?? null,
       count: async ({
@@ -998,14 +1330,19 @@ function createPrismaMock(store: TestStore) {
         orderBy,
         take
       }: {
-        where: { userId: string; createdAt?: { gte: Date } };
+        where: {
+          userId: string;
+          createdAt?: { gte: Date };
+          assignmentId?: { in: string[] };
+        };
         orderBy?: { createdAt: "desc" };
         take?: number;
       }) => {
         const events = store.feedbackEvents.filter(
           (event) =>
             event.userId === where.userId &&
-            (!where.createdAt || event.createdAt >= where.createdAt.gte)
+            (!where.createdAt || event.createdAt >= where.createdAt.gte) &&
+            (!where.assignmentId || (event.assignmentId && where.assignmentId.in.includes(event.assignmentId)))
         );
         if (orderBy?.createdAt === "desc") {
           events.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());

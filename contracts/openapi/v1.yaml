@@ -1203,12 +1203,116 @@ components:
             $ref: "#/components/schemas/ActivityCatalogItem"
     ActivityHistory:
       type: object
-      required: [items]
+      required: [items, nextCursor]
       properties:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/ActivityAssignment"
+            $ref: "#/components/schemas/ActivityHistorySession"
+        nextCursor:
+          type: [string, "null"]
+    ActivityHistorySession:
+      type: object
+      required:
+        - assignmentId
+        - templateId
+        - code
+        - title
+        - description
+        - category
+        - difficulty
+        - status
+        - presentation
+        - rewardSummary
+        - assignedAt
+        - completedAt
+        - sessionAt
+        - skipReason
+        - feedback
+        - replayHint
+      properties:
+        assignmentId:
+          type: string
+          format: uuid
+        templateId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [rest, game, office_theater, physical, imagination]
+        difficulty:
+          type: string
+          enum: [easy, normal, hard]
+        status:
+          type: string
+          enum: [active, completed, skipped, expired]
+        flavor:
+          type: string
+          enum: [quick, weird, recharge, tiny_challenge, tiny_reflection]
+        presentation:
+          $ref: "#/components/schemas/ActivityPresentation"
+        rewardSummary:
+          type: object
+          required: [score, drawProgress, rewarded]
+          properties:
+            score:
+              type: integer
+            drawProgress:
+              type: integer
+            rewarded:
+              type: boolean
+        assignedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: [string, "null"]
+          format: date-time
+        sessionAt:
+          type: string
+          format: date-time
+        skipReason:
+          type: [string, "null"]
+          enum: [too_much_work, not_interested, not_convenient, want_weirder, other, null]
+        feedback:
+          type: [object, "null"]
+          required: [type, acknowledgement]
+          properties:
+            type:
+              type: string
+              enum: [liked, neutral, dislike_similar, want_weirder, too_much_work, too_long, too_physical, shorter]
+            acknowledgement:
+              type: string
+        replayHint:
+          $ref: "#/components/schemas/ActivityReplayHint"
+    ActivityReplayHint:
+      type: object
+      required:
+        - sourceAssignmentId
+        - sourceTemplateId
+        - preferredCategory
+        - excludeTemplateId
+      properties:
+        sourceAssignmentId:
+          type: string
+          format: uuid
+        sourceTemplateId:
+          type: string
+          format: uuid
+        preferredCategory:
+          type: string
+          enum: [rest, game, office_theater, physical, imagination]
+        preferredFlavor:
+          type: [string, "null"]
+          enum: [quick, weird, recharge, tiny_challenge, tiny_reflection, null]
+        excludeTemplateId:
+          type: string
+          format: uuid
     ActivityCompleteResult:
       type: object
       required: [assignment, reward, feedback, resultTitle, resultCopy]
@@ -1702,6 +1806,22 @@ paths:
                 category:
                   type: string
                   enum: [rest, game, office_theater, physical, imagination]
+                replayHint:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    sourceAssignmentId:
+                      type: string
+                      format: uuid
+                    preferredCategory:
+                      type: string
+                      enum: [rest, game, office_theater, physical, imagination]
+                    preferredFlavor:
+                      type: string
+                      enum: [quick, weird, recharge, tiny_challenge, tiny_reflection]
+                    excludeTemplateId:
+                      type: string
+                      format: uuid
       responses:
         "200":
           description: Assigned random activity
@@ -1746,6 +1866,13 @@ paths:
       security:
         - bearerAuth: []
       parameters:
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [today, recent]
+            default: recent
         - name: limit
           in: query
           required: false
@@ -1753,10 +1880,15 @@ paths:
             type: integer
             minimum: 1
             maximum: 50
-            default: 10
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
-          description: Recent activity completion history
+          description: Private activity session history
           content:
             application/json:
               schema:

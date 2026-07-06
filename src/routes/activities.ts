@@ -19,7 +19,8 @@ import {
   summarizeActivityInteraction,
   summarizeCompletedSteps,
   validateActivityInteractionProgress,
-  type ActivityInteractionProgress
+  type ActivityInteractionProgress,
+  type ActivityPresentation
 } from "../activities/interaction.js";
 import {
   canonicalActivityCategories,
@@ -30,6 +31,7 @@ import {
   normalizeActivityCategory,
   recommendActivity,
   type ActivityFeedbackSignal,
+  type ActivityFlavor,
   type ActivitySkipReason,
   type CanonicalActivityCategory
 } from "../activities/recommendation.js";
@@ -121,31 +123,72 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           type: "object",
           additionalProperties: false,
           properties: {
-            limit: { type: "integer", minimum: 1, maximum: 50, default: 10 }
+            window: { type: "string", enum: ["today", "recent"], default: "recent" },
+            limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+            cursor: { type: "string" }
           }
         }
       }
     },
     async (request) => {
-      const query = request.query as { limit?: number };
-      const assignments = await server.prisma.activityAssignment.findMany({
-        where: {
-          userId: request.user!.id,
-          status: {
-            in: [
-              ActivityAssignmentStatus.completed,
-              ActivityAssignmentStatus.expired,
-              ActivityAssignmentStatus.skipped
-            ]
+      const query = request.query as {
+        window?: ActivityHistoryWindow;
+        limit?: number;
+        cursor?: string;
+      };
+      const window = query.window ?? "recent";
+      const limit = query.limit ?? 20;
+      const cursor = parseHistoryCursor(query.cursor);
+      const now = new Date();
+      const where: Prisma.ActivityAssignmentWhereInput = {
+        userId: request.user!.id,
+        status: {
+          in: [
+            ActivityAssignmentStatus.completed,
+            ActivityAssignmentStatus.expired,
+            ActivityAssignmentStatus.skipped
+          ]
+        }
+      };
+      if (window === "today") {
+        const { start, end } = utcDayRange(now);
+        where.OR = [
+          { completedAt: { gte: start, lt: end } },
+          {
+            completedAt: null,
+            assignedAt: { gte: start, lt: end }
           }
-        },
-        orderBy: { assignedAt: "desc" },
-        take: query.limit ?? 10,
+        ];
+      }
+      if (cursor) {
+        const cursorFilter: Prisma.ActivityAssignmentWhereInput[] = [
+          { assignedAt: { lt: cursor.assignedAt } },
+          { assignedAt: cursor.assignedAt, id: { lt: cursor.id } }
+        ];
+        where.AND = [{ OR: cursorFilter }];
+      }
+
+      const assignments = await server.prisma.activityAssignment.findMany({
+        where,
+        orderBy: [{ assignedAt: "desc" }, { id: "desc" }],
+        take: limit + 1,
         include: { template: true }
       });
 
+      const hasMore = assignments.length > limit;
+      const items = hasMore ? assignments.slice(0, limit) : assignments;
+      const nextCursor = hasMore ? buildHistoryCursor(items[items.length - 1]) : null;
+      const feedbackByAssignment = await loadFeedbackForAssignments(
+        server,
+        request.user!.id,
+        items.map((assignment) => assignment.id)
+      );
+
       return ok({
-        items: assignments.map(serializeAssignment)
+        items: items.map((assignment) =>
+          serializeHistorySession(assignment, feedbackByAssignment.get(assignment.id) ?? [])
+        ),
+        nextCursor
       });
     }
   );
@@ -157,7 +200,10 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       preHandler: [server.requireAuth]
     },
     async (request, reply) => {
-      const body = (request.body ?? {}) as { category?: string };
+      const body = (request.body ?? {}) as {
+        category?: string;
+        replayHint?: ActivityReplayHintInput;
+      };
       if (body.category && !isCanonicalActivityCategory(body.category)) {
         return reply
           .code(400)
@@ -166,6 +212,9 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       const preferredCategory = isCanonicalActivityCategory(body.category)
         ? body.category
         : undefined;
+      const replayHint = body.replayHint
+        ? await resolveReplayHint(server, request.user!.id, body.replayHint)
+        : null;
       const now = new Date();
       const active = await server.prisma.activityAssignment.findFirst({
         where: {
@@ -212,7 +261,9 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         categoryCompletionCount: state.categoryCompletionCount,
         lastUsedAt: state.lastUsedAt
       })), {
-        preferredCategory,
+        preferredCategory: replayHint?.preferredCategory ?? preferredCategory,
+        preferredFlavor: replayHint?.preferredFlavor,
+        excludeTemplateId: replayHint?.excludeTemplateId,
         recentSkipReasons,
         feedbackSignals,
         now
@@ -253,11 +304,13 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         metadata: {
           templateCode: template.code,
           difficulty: template.difficulty,
-          preferredCategory: preferredCategory ?? null,
+          preferredCategory: replayHint?.preferredCategory ?? preferredCategory ?? null,
+          preferredFlavor: replayHint?.preferredFlavor ?? null,
+          sourceAssignmentId: replayHint?.sourceAssignmentId ?? null,
           recommendationReason: recommendation.reason,
           recommendationExplanation: explainActivityRecommendation({
             reason: recommendation.reason,
-            preferredCategory,
+            preferredCategory: replayHint?.preferredCategory ?? preferredCategory,
             flavor: recommendation.flavor,
             recentSkipReasons
           })
@@ -270,7 +323,7 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         recommendationReason: recommendation.reason,
         recommendationExplanation: explainActivityRecommendation({
           reason: recommendation.reason,
-          preferredCategory,
+          preferredCategory: replayHint?.preferredCategory ?? preferredCategory,
           flavor: recommendation.flavor,
           recentSkipReasons
         })
@@ -998,6 +1051,210 @@ function nextDrawState(
   return {
     chancesGranted: Math.floor(totalProgress / progressPerChance),
     remainingProgress: totalProgress % progressPerChance
+  };
+}
+
+type ActivityHistoryWindow = "today" | "recent";
+
+type ActivityReplayHintInput = {
+  sourceAssignmentId?: string;
+  preferredCategory?: string;
+  preferredFlavor?: string;
+  excludeTemplateId?: string;
+};
+
+type HistoryCursor = {
+  assignedAt: Date;
+  id: string;
+};
+
+function parseHistoryCursor(cursor: string | undefined): HistoryCursor | null {
+  if (!cursor) return null;
+  const separatorIndex = cursor.lastIndexOf("|");
+  if (separatorIndex === -1) return null;
+  const assignedAtPart = cursor.slice(0, separatorIndex);
+  const idPart = cursor.slice(separatorIndex + 1);
+  const assignedAt = Date.parse(assignedAtPart);
+  if (Number.isNaN(assignedAt) || !idPart) return null;
+  return { assignedAt: new Date(assignedAt), id: idPart };
+}
+
+function buildHistoryCursor(assignment: { assignedAt: Date; id: string }): string {
+  return `${assignment.assignedAt.toISOString()}|${assignment.id}`;
+}
+
+function utcDayRange(now: Date): { start: Date; end: Date } {
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 1);
+  return { start, end };
+}
+
+async function loadFeedbackForAssignments(
+  server: FastifyInstance,
+  userId: string,
+  assignmentIds: string[]
+): Promise<Map<string, ActivityFeedbackEventWithAck[]>> {
+  if (assignmentIds.length === 0) {
+    return new Map();
+  }
+  const events = await server.prisma.activityFeedbackEvent.findMany({
+    where: {
+      userId,
+      assignmentId: { in: assignmentIds }
+    }
+  });
+  const map = new Map<string, ActivityFeedbackEventWithAck[]>();
+  for (const event of events) {
+    if (!event.assignmentId) continue;
+    const list = map.get(event.assignmentId) ?? [];
+    list.push({
+      id: event.id,
+      assignmentId: event.assignmentId,
+      templateId: event.templateId,
+      category: event.category,
+      feedbackType: event.feedbackType,
+      feedbackSource: event.feedbackSource,
+      skipReason: activitySkipReasons.includes(event.skipReason as ActivitySkipReason)
+        ? (event.skipReason as ActivitySkipReason)
+        : null,
+      createdAt: event.createdAt,
+      acknowledgement: acknowledgementForFeedback(event.feedbackType)
+    });
+    map.set(event.assignmentId, list);
+  }
+  return map;
+}
+
+type ActivityFeedbackEventWithAck = {
+  id: string;
+  assignmentId: string;
+  templateId: string;
+  category: ActivityCategory;
+  feedbackType: ActivityFeedbackType;
+  feedbackSource: ActivityFeedbackSource;
+  skipReason: ActivitySkipReason | null;
+  createdAt: Date;
+  acknowledgement: string;
+};
+
+function findRelevantFeedback(
+  events: ActivityFeedbackEventWithAck[],
+  status: ActivityAssignmentStatus
+): ActivityFeedbackEventWithAck | null {
+  const source =
+    status === ActivityAssignmentStatus.skipped
+      ? ActivityFeedbackSource.skip
+      : ActivityFeedbackSource.completion;
+  return events.find((event) => event.feedbackSource === source) ?? events[0] ?? null;
+}
+
+function serializeHistorySession(
+  assignment: {
+    id: string;
+    status: ActivityAssignmentStatus;
+    assignedAt: Date;
+    completedAt: Date | null;
+    expiresAt: Date | null;
+    rewarded: boolean;
+    template: ActivityTemplate;
+  },
+  feedbackEvents: ActivityFeedbackEventWithAck[]
+) {
+  const reward = toRewardConfig(assignment.template.rewardConfig);
+  const interaction = buildActivityInteraction(assignment.template);
+  const presentation = buildActivityPresentation(assignment.template);
+  const flavor = flavorForTemplate(assignment.template);
+  const feedback = findRelevantFeedback(feedbackEvents, assignment.status);
+  const skipReason =
+    assignment.status === ActivityAssignmentStatus.skipped
+      ? (feedback?.skipReason ?? null)
+      : null;
+
+  return {
+    assignmentId: assignment.id,
+    templateId: assignment.template.id,
+    code: assignment.template.code,
+    title: assignment.template.title,
+    description: assignment.template.description,
+    category: normalizeActivityCategory(assignment.template.category),
+    difficulty: assignment.template.difficulty,
+    status: assignment.status,
+    flavor,
+    presentation,
+    rewardSummary: {
+      score: reward.score ?? 0,
+      drawProgress: reward.drawProgress ?? 0,
+      rewarded: assignment.rewarded
+    },
+    assignedAt: assignment.assignedAt.toISOString(),
+    completedAt: assignment.completedAt?.toISOString() ?? null,
+    sessionAt: (assignment.completedAt ?? assignment.assignedAt).toISOString(),
+    skipReason,
+    feedback: feedback
+      ? {
+          type: feedback.feedbackType,
+          acknowledgement: feedback.acknowledgement
+        }
+      : null,
+    replayHint: {
+      sourceAssignmentId: assignment.id,
+      sourceTemplateId: assignment.template.id,
+      preferredCategory: normalizeActivityCategory(assignment.template.category),
+      preferredFlavor: flavor,
+      excludeTemplateId: assignment.template.id
+    }
+  };
+}
+
+async function resolveReplayHint(
+  server: FastifyInstance,
+  userId: string,
+  input: ActivityReplayHintInput
+): Promise<
+  | {
+      sourceAssignmentId: string;
+      preferredCategory?: CanonicalActivityCategory;
+      preferredFlavor?: ActivityFlavor;
+      excludeTemplateId?: string;
+    }
+  | null
+> {
+  let sourceAssignmentId = input.sourceAssignmentId;
+  let preferredCategory: CanonicalActivityCategory | undefined = isCanonicalActivityCategory(
+    input.preferredCategory ?? ""
+  )
+    ? (input.preferredCategory as CanonicalActivityCategory)
+    : undefined;
+  let preferredFlavor: ActivityFlavor | undefined = isActivityFlavor(input.preferredFlavor ?? "")
+    ? (input.preferredFlavor as ActivityFlavor)
+    : undefined;
+  let excludeTemplateId = input.excludeTemplateId;
+
+  if (sourceAssignmentId) {
+    const assignment = await server.prisma.activityAssignment.findUnique({
+      where: { id: sourceAssignmentId },
+      include: { template: true }
+    });
+    if (assignment && assignment.userId === userId) {
+      preferredCategory ??= normalizeActivityCategory(assignment.template.category);
+      const flavor = flavorForTemplate(assignment.template);
+      if (flavor) {
+        preferredFlavor ??= flavor;
+      }
+      excludeTemplateId ??= assignment.template.id;
+    }
+  }
+
+  if (!preferredCategory && !preferredFlavor && !excludeTemplateId) {
+    return null;
+  }
+
+  return {
+    sourceAssignmentId: sourceAssignmentId ?? "",
+    preferredCategory,
+    preferredFlavor,
+    excludeTemplateId
   };
 }
 
