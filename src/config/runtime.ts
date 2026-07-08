@@ -14,7 +14,8 @@ const runtimeConfigSchema = z.object({
     activities: rateLimitPolicySchema,
     beanDraws: rateLimitPolicySchema,
     leaderboardReads: rateLimitPolicySchema,
-    profileUpdates: rateLimitPolicySchema
+    profileUpdates: rateLimitPolicySchema,
+    fishTank: rateLimitPolicySchema
   }),
   auth: z.object({
     requireEmailVerified: z.boolean()
@@ -28,6 +29,10 @@ const runtimeConfigSchema = z.object({
   }),
   beans: z.object({
     drawProgressPerChance: z.number().int().positive()
+  }),
+  fishTank: z.object({
+    starterFishCode: z.string(),
+    feedCooldownSeconds: z.number().int().positive()
   })
 });
 
@@ -42,7 +47,8 @@ const defaults: RuntimeConfig = {
     activities: { max: 30, timeWindow: "1 minute" },
     beanDraws: { max: 10, timeWindow: "1 minute" },
     leaderboardReads: { max: 120, timeWindow: "1 minute" },
-    profileUpdates: { max: 10, timeWindow: "1 minute" }
+    profileUpdates: { max: 10, timeWindow: "1 minute" },
+    fishTank: { max: 30, timeWindow: "1 minute" }
   },
   auth: {
     requireEmailVerified: false
@@ -56,6 +62,10 @@ const defaults: RuntimeConfig = {
   },
   beans: {
     drawProgressPerChance: 3
+  },
+  fishTank: {
+    starterFishCode: "starter_goldfish",
+    feedCooldownSeconds: 4 * 60 * 60
   }
 };
 

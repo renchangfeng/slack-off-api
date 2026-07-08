@@ -23,7 +23,8 @@ const runtimeConfig: RuntimeConfig = {
     activities: { max: 1000, timeWindow: "1 minute" },
     beanDraws: { max: 1000, timeWindow: "1 minute" },
     leaderboardReads: { max: 1000, timeWindow: "1 minute" },
-    profileUpdates: { max: 1000, timeWindow: "1 minute" }
+    profileUpdates: { max: 1000, timeWindow: "1 minute" },
+    fishTank: { max: 1000, timeWindow: "1 minute" }
   },
   auth: { requireEmailVerified: false },
   checkIns: {
@@ -33,7 +34,8 @@ const runtimeConfig: RuntimeConfig = {
     scorePerEligibleMinute: 1,
     drawProgressPerSession: 1
   },
-  beans: { drawProgressPerChance: 3 }
+  beans: { drawProgressPerChance: 3 },
+  fishTank: { starterFishCode: "starter_goldfish", feedCooldownSeconds: 4 * 60 * 60 }
 };
 
 describe("progression routes", () => {

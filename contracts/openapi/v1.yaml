@@ -1347,6 +1347,88 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/AchievementUnlock"
+    FishTankSummary:
+      type: object
+      required: [initialized, fish, careAvailability, moodCopy, nextAction]
+      properties:
+        initialized:
+          type: boolean
+        fish:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankFish"
+        careAvailability:
+          $ref: "#/components/schemas/FishTankCareAvailability"
+        moodCopy:
+          type: string
+        nextAction:
+          type: string
+          enum: [initialize, feed, wait]
+    FishTankFish:
+      type: object
+      required: [id, definitionId, name, rarity, theme, personality, artKey, acquiredSource, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        definitionId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+        theme:
+          type: string
+          enum: [office, restroom, daydream]
+        personality:
+          type: string
+        artKey:
+          type: string
+        acquiredSource:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    FishTankCareAvailability:
+      type: object
+      required: [feed]
+      properties:
+        feed:
+          type: object
+          required: [available, nextAvailableAt, cooldownRemainingSeconds]
+          properties:
+            available:
+              type: boolean
+            nextAvailableAt:
+              type: [string, "null"]
+              format: date-time
+            cooldownRemainingSeconds:
+              type: integer
+              minimum: 0
+    CareInteractionRequest:
+      type: object
+      additionalProperties: false
+      required: [interactionType, idempotencyKey]
+      properties:
+        interactionType:
+          type: string
+          enum: [feed]
+        idempotencyKey:
+          type: string
+          minLength: 8
+          maxLength: 128
+    CareInteractionResult:
+      type: object
+      required: [success, resultCopy, tank]
+      properties:
+        success:
+          type: boolean
+        resultCopy:
+          type: string
+        tank:
+          $ref: "#/components/schemas/FishTankSummary"
 paths:
   /health:
     get:
@@ -2011,3 +2093,75 @@ paths:
                     type: "null"
         "404":
           description: Activity assignment not found
+  /v1/fish-tank:
+    get:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      responses:
+        "200":
+          description: Personal fish tank summary
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/FishTankSummary"
+                  error:
+                    type: "null"
+  /v1/fish-tank/initialize:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      responses:
+        "200":
+          description: Tank initialized or already initialized
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/FishTankSummary"
+                  error:
+                    type: "null"
+        "409":
+          description: Starter fish unavailable
+  /v1/fish-tank/interactions:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CareInteractionRequest"
+      responses:
+        "200":
+          description: Care interaction result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CareInteractionResult"
+                  error:
+                    type: "null"
+        "400":
+          description: Unsupported interaction or invalid idempotency key
+        "409":
+          description: Tank not initialized or interaction on cooldown

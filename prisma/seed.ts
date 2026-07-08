@@ -5,6 +5,8 @@ import {
   BeanRarity,
   BeanTheme,
   CosmeticType,
+  FishRarity,
+  FishTheme,
   Prisma,
   PrismaClient
 } from "@prisma/client";
@@ -140,6 +142,19 @@ const beans = [
     theme: BeanTheme.daydream,
     description: "月亮说今天到这里，系统表示收到。",
     weight: 4
+  }
+];
+
+const fishDefinitions = [
+  {
+    code: "starter_goldfish",
+    name: "摸鱼初心小金",
+    rarity: FishRarity.common,
+    theme: FishTheme.daydream,
+    personality: "假装工作的",
+    artKey: "fish-starter-goldfish",
+    sourceHint: "starter",
+    sortOrder: 1
   }
 ];
 
@@ -2357,6 +2372,14 @@ async function main() {
       where: { code: bean.code },
       create: bean,
       update: bean
+    });
+  }
+
+  for (const fish of fishDefinitions) {
+    await prisma.fishDefinition.upsert({
+      where: { code: fish.code },
+      create: fish,
+      update: fish
     });
   }
 

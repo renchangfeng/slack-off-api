@@ -19,6 +19,7 @@ import { registerCheckInRoutes } from "./routes/checkins.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboards.js";
 import { registerProgressionRoutes } from "./routes/progression.js";
 import { registerSocialRoutes } from "./routes/social.js";
+import { registerFishTankRoutes } from "./routes/fish-tank.js";
 
 const runtimeConfig = await loadRuntimeConfig();
 
@@ -67,6 +68,7 @@ await server.register(registerAchievementRoutes);
 await server.register(registerActivityRoutes);
 await server.register(registerProgressionRoutes);
 await server.register(registerSocialRoutes);
+await server.register(registerFishTankRoutes);
 
 server.get("/health", async (request) => {
   return ok({

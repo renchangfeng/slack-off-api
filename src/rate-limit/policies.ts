@@ -7,7 +7,8 @@ export type RateLimitBucket =
   | "activities"
   | "beanDraws"
   | "leaderboardReads"
-  | "profileUpdates";
+  | "profileUpdates"
+  | "fishTank";
 
 export function rateLimitFor(
   server: FastifyInstance,

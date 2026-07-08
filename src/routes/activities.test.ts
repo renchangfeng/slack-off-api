@@ -26,7 +26,8 @@ const runtimeConfig: RuntimeConfig = {
     activities: { max: 1000, timeWindow: "1 minute" },
     beanDraws: { max: 1000, timeWindow: "1 minute" },
     leaderboardReads: { max: 1000, timeWindow: "1 minute" },
-    profileUpdates: { max: 1000, timeWindow: "1 minute" }
+    profileUpdates: { max: 1000, timeWindow: "1 minute" },
+    fishTank: { max: 1000, timeWindow: "1 minute" }
   },
   auth: { requireEmailVerified: false },
   checkIns: {
@@ -36,7 +37,8 @@ const runtimeConfig: RuntimeConfig = {
     scorePerEligibleMinute: 1,
     drawProgressPerSession: 1
   },
-  beans: { drawProgressPerChance: 3 }
+  beans: { drawProgressPerChance: 3 },
+  fishTank: { starterFishCode: "starter_goldfish", feedCooldownSeconds: 4 * 60 * 60 }
 };
 
 describe("activity routes", () => {
@@ -677,8 +679,8 @@ describe("activity routes", () => {
 
   it("filters history by today window", async () => {
     const server = await buildTestServer(store);
-    const today = new Date("2026-07-06T12:00:00.000Z");
-    const yesterday = new Date("2026-07-05T12:00:00.000Z");
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
     store.addAssignment({
       userId,
       status: ActivityAssignmentStatus.completed,
