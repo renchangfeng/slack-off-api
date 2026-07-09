@@ -547,6 +547,21 @@ components:
                 type: integer
               completed:
                 type: boolean
+              fishTankEffect:
+                type: object
+                required: [type, resourceType, label, hint, available]
+                properties:
+                  type:
+                    type: string
+                    enum: [care_flavor, bubble_style, hatch_preview]
+                  resourceType:
+                    $ref: "#/components/schemas/FishTankResourceType"
+                  label:
+                    type: string
+                  hint:
+                    type: string
+                  available:
+                    type: boolean
         showcase:
           type: array
           items:
@@ -559,7 +574,7 @@ components:
                 $ref: "#/components/schemas/Bean"
     BeanDrawResult:
       type: object
-      required: [bean, duplicate, fragmentsGranted, pityTriggered, pityCount, remainingDrawChances, resultTitle, resultCopy, nextHint]
+      required: [bean, duplicate, fragmentsGranted, pityTriggered, pityCount, remainingDrawChances, resultTitle, resultCopy, nextHint, fishTankOutcomes]
       properties:
         bean:
           $ref: "#/components/schemas/Bean"
@@ -579,6 +594,10 @@ components:
           type: string
         nextHint:
           type: string
+        fishTankOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankResourceOutcome"
         achievementsUnlocked:
           type: array
           items:
@@ -1349,7 +1368,7 @@ components:
                 $ref: "#/components/schemas/AchievementUnlock"
     FishTankSummary:
       type: object
-      required: [initialized, fish, careAvailability, moodCopy, nextAction]
+      required: [initialized, fish, careAvailability, moodCopy, nextAction, resourceSummary]
       properties:
         initialized:
           type: boolean
@@ -1364,6 +1383,8 @@ components:
         nextAction:
           type: string
           enum: [initialize, feed, wait]
+        resourceSummary:
+          $ref: "#/components/schemas/FishTankResourceSummary"
     FishTankFish:
       type: object
       required: [id, definitionId, name, rarity, theme, personality, artKey, acquiredSource, createdAt]
@@ -1429,6 +1450,48 @@ components:
           type: string
         tank:
           $ref: "#/components/schemas/FishTankSummary"
+    FishTankResourceType:
+      type: string
+      enum: [food, bubble, hatch_progress]
+    FishTankResourceOutcome:
+      type: object
+      required: [resourceType, quantity, label, copy]
+      properties:
+        resourceType:
+          $ref: "#/components/schemas/FishTankResourceType"
+        quantity:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+        copy:
+          type: string
+    FishTankResourceSummary:
+      type: object
+      required: [resources, totalFood, totalBubbles, totalHatchProgress]
+      properties:
+        resources:
+          type: array
+          items:
+            type: object
+            required: [resourceType, quantity, label]
+            properties:
+              resourceType:
+                $ref: "#/components/schemas/FishTankResourceType"
+              quantity:
+                type: integer
+                minimum: 0
+              label:
+                type: string
+        totalFood:
+          type: integer
+          minimum: 0
+        totalBubbles:
+          type: integer
+          minimum: 0
+        totalHatchProgress:
+          type: integer
+          minimum: 0
 paths:
   /health:
     get:

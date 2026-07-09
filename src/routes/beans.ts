@@ -11,12 +11,16 @@ import { recordAuditEventWithClient } from "../audit/events.js";
 import {
   BEAN_PITY_THRESHOLD,
   FRAGMENTS_PER_DRAW,
-  beanCombinations,
+  deriveBeanCombinations,
   duplicateFragments,
   selectBean
 } from "../beans/rules.js";
 import { fail, ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
+import {
+  grantResourcesFromBeanDraw,
+  type FishTankResourceOutcome
+} from "../fish-tank/resources.js";
 
 type BeanWithQuantity = BeanDefinition & {
   inventory: Array<Pick<BeanInventory, "quantity">>;
@@ -81,16 +85,7 @@ export async function registerBeanRoutes(server: FastifyInstance) {
             total: themed.length
           };
         }),
-        combinations: beanCombinations.map((combination) => {
-          const owned = combination.beanCodes.filter((code) => ownedCodes.has(code)).length;
-          return {
-            code: combination.code,
-            name: combination.name,
-            owned,
-            required: combination.beanCodes.length,
-            completed: owned === combination.beanCodes.length
-          };
-        }),
+        combinations: deriveBeanCombinations(ownedCodes),
         showcase: showcase.map((item) => ({
           position: item.position,
           bean: serializeBean({ ...item.bean, inventory: [{ quantity: 1 }] })
@@ -154,6 +149,8 @@ export async function registerBeanRoutes(server: FastifyInstance) {
       const now = new Date();
       const remainingDrawChances = stats.drawChances - 1;
 
+      const drawIdempotencyKey = body?.idempotencyKey ?? `draw_${request.trace.requestId}`;
+
       const result = await server.prisma.$transaction(async (tx) => {
         await tx.userStats.update({
           where: { userId: request.user!.id },
@@ -207,7 +204,7 @@ export async function registerBeanRoutes(server: FastifyInstance) {
             sourceId: null,
             rewardType: RewardType.bean,
             amount: 1,
-            idempotencyKey: body?.idempotencyKey,
+            idempotencyKey: drawIdempotencyKey,
             metadata: {
               requestId: request.trace.requestId,
               traceId: request.trace.traceId,
@@ -222,11 +219,19 @@ export async function registerBeanRoutes(server: FastifyInstance) {
           }
         });
 
+        const fishTankOutcomes = await grantResourcesFromBeanDraw(tx, request.user!.id, {
+          drawIdempotencyKey,
+          rarity: selected.rarity,
+          duplicate,
+          pityTriggered: selection.pityTriggered
+        });
+
         return {
           inventory,
           duplicate,
           fragmentsGranted,
-          remainingDrawChances
+          remainingDrawChances,
+          fishTankOutcomes
         };
       });
 
@@ -243,7 +248,11 @@ export async function registerBeanRoutes(server: FastifyInstance) {
           theme,
           pityTriggered: selection.pityTriggered,
           fragmentsGranted: result.fragmentsGranted,
-          remainingDrawChances: result.remainingDrawChances
+          remainingDrawChances: result.remainingDrawChances,
+          fishTankOutcomes: result.fishTankOutcomes.map((outcome) => ({
+            resourceType: outcome.resourceType,
+            quantity: outcome.quantity
+          }))
         },
         trace: request.trace
       });
@@ -261,6 +270,7 @@ export async function registerBeanRoutes(server: FastifyInstance) {
         pityTriggered: selection.pityTriggered,
         pityCount: selection.nextPityCount,
         remainingDrawChances: result.remainingDrawChances,
+        fishTankOutcomes: result.fishTankOutcomes,
         resultTitle: drawResultTitle({
           duplicate: result.duplicate,
           pityTriggered: selection.pityTriggered,

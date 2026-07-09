@@ -129,6 +129,14 @@ enum FishTheme {
   daydream
 }
 
+enum FishTankResourceType {
+  food
+  bubble
+  hatch_progress
+
+  @@map("fish_tank_resource_type")
+}
+
 model User {
   id                  String               @id @default(uuid()) @db.Uuid
   authSubject         String               @unique @map("auth_subject")
@@ -164,6 +172,7 @@ model User {
   userTank            UserTank?
   userFishes          UserFish[]
   fishCareEvents      FishCareEvent[]
+  fishTankResourceLedger FishTankResourceLedger[]
 
   @@map("users")
 }
@@ -559,6 +568,24 @@ model FishCareEvent {
   @@unique([userId, idempotencyKey])
   @@index([userId, interactionType, createdAt])
   @@map("fish_care_events")
+}
+
+model FishTankResourceLedger {
+  id             String               @id @default(uuid()) @db.Uuid
+  userId         String               @map("user_id") @db.Uuid
+  resourceType   FishTankResourceType @map("resource_type")
+  quantity       Int
+  sourceType     String               @map("source_type")
+  sourceId       String?              @map("source_id") @db.Uuid
+  idempotencyKey String               @map("idempotency_key")
+  metadata       Json
+  createdAt      DateTime             @default(now()) @map("created_at")
+  user           User                 @relation(fields: [userId], references: [id])
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, resourceType])
+  @@index([userId, sourceType, sourceId])
+  @@map("fish_tank_resource_ledger")
 }
 
 model AuditEvent {

@@ -68,6 +68,28 @@ describe("bean routes", () => {
     });
     expect(store.stats.get(userId)?.drawChances).toBe(0);
     expect(store.inventory.get(`${userId}:${beanId}`)?.quantity).toBe(1);
+    expect(response.json().data.fishTankOutcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ resourceType: "bubble", quantity: 1 }),
+        expect.objectContaining({ resourceType: "hatch_progress", quantity: 1 })
+      ])
+    );
+    expect(store.resourceLedger).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          userId,
+          resourceType: "bubble",
+          quantity: 1,
+          idempotencyKey: "draw_success_1:bubble"
+        }),
+        expect.objectContaining({
+          userId,
+          resourceType: "hatch_progress",
+          quantity: 1,
+          idempotencyKey: "draw_success_1:hatch_progress"
+        })
+      ])
+    );
     expect(store.rewardLedger).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -102,6 +124,7 @@ describe("bean routes", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json().error.code).toBe("NO_DRAW_CHANCE");
     expect(store.rewardLedger).toHaveLength(0);
+    expect(store.resourceLedger).toHaveLength(0);
     expect(store.auditEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -195,6 +218,14 @@ describe("bean routes", () => {
       lastObtainedAt: new Date()
     });
 
+    const beforeCollection = await server.inject({
+      method: "GET",
+      url: "/v1/beans/collection",
+      headers: { authorization: "Bearer test" }
+    });
+    const beforeCombinations = beforeCollection.json().data.combinations;
+    const beforeResources = [...store.resourceLedger];
+
     const response = await server.inject({
       method: "PUT",
       url: "/v1/beans/showcase/2",
@@ -204,6 +235,13 @@ describe("bean routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(store.showcase.get(`${userId}:2`)).toMatchObject({ beanId, position: 2 });
+    const afterCollection = await server.inject({
+      method: "GET",
+      url: "/v1/beans/collection",
+      headers: { authorization: "Bearer test" }
+    });
+    expect(afterCollection.json().data.combinations).toEqual(beforeCombinations);
+    expect(store.resourceLedger).toEqual(beforeResources);
 
     await server.close();
   });
@@ -245,12 +283,24 @@ type TestInventory = {
   lastObtainedAt: Date;
 };
 
+type TestResourceLedger = {
+  userId: string;
+  resourceType: string;
+  quantity: number;
+  sourceType: string;
+  sourceId: string | null;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: Date;
+};
+
 type TestStore = ReturnType<typeof createStore>;
 
 function createStore() {
   const stats = new Map<string, TestStats>();
   const inventory = new Map<string, TestInventory>();
   const rewardLedger: Array<Record<string, unknown>> = [];
+  const resourceLedger: TestResourceLedger[] = [];
   const auditEvents: Array<Record<string, unknown>> = [];
   const showcase = new Map<string, { userId: string; beanId: string; position: number }>();
   const bean = {
@@ -271,6 +321,7 @@ function createStore() {
     stats,
     inventory,
     rewardLedger,
+    resourceLedger,
     auditEvents,
     showcase,
     bean
@@ -401,6 +452,45 @@ function createPrismaMock(store: TestStore) {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         store.rewardLedger.push(data);
         return data;
+      }
+    },
+    fishTankResourceLedger: {
+      upsert: async ({
+        where,
+        create
+      }: {
+        where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } };
+        create: TestResourceLedger;
+      }) => {
+        const existing = store.resourceLedger.find(
+          (entry) =>
+            entry.userId === where.userId_idempotencyKey.userId &&
+            entry.idempotencyKey === where.userId_idempotencyKey.idempotencyKey
+        );
+        if (existing) {
+          return existing;
+        }
+        const entry = { ...create, createdAt: create.createdAt ?? new Date() };
+        store.resourceLedger.push(entry);
+        return entry;
+      },
+      groupBy: async ({
+        where
+      }: {
+        by: string[];
+        where: { userId: string };
+        _sum: { quantity: boolean };
+      }) => {
+        const groups = new Map<string, number>();
+        for (const entry of store.resourceLedger) {
+          if (entry.userId === where.userId) {
+            groups.set(entry.resourceType, (groups.get(entry.resourceType) ?? 0) + entry.quantity);
+          }
+        }
+        return Array.from(groups.entries()).map(([resourceType, quantity]) => ({
+          resourceType,
+          _sum: { quantity }
+        }));
       }
     },
     auditEvent: {

@@ -1,5 +1,6 @@
 import type { FishCareEvent, Prisma, UserFish } from "@prisma/client";
 import type { TraceContext } from "../observability/ids.js";
+import { getResourceSummary, type FishTankResourceSummary } from "./resources.js";
 
 export type FishTankSummary = {
   initialized: boolean;
@@ -23,6 +24,7 @@ export type FishTankSummary = {
   };
   moodCopy: string;
   nextAction: string;
+  resourceSummary: FishTankResourceSummary;
 };
 
 export type CareInteractionInput = {
@@ -38,7 +40,7 @@ export type CareInteractionResult = {
 
 type PrismaClientLike = Pick<
   Prisma.TransactionClient,
-  "userTank" | "userFish" | "fishDefinition" | "fishCareEvent"
+  "userTank" | "userFish" | "fishDefinition" | "fishCareEvent" | "fishTankResourceLedger"
 >;
 
 const SUPPORTED_INTERACTION_TYPES = new Set(["feed"]);
@@ -64,13 +66,15 @@ export async function getTankSummary(
 
   const initialized = Boolean(tank);
   const careAvailability = buildCareAvailability(latestFeedEvent, now, feedCooldownSeconds);
+  const resourceSummary = await getResourceSummary(prisma, userId);
 
   return {
     initialized,
     fish: fishRows.map(serializeFish),
     careAvailability,
     moodCopy: deriveMoodCopy({ initialized, fishCount: fishRows.length, latestFeedEvent, now, careAvailability }),
-    nextAction: deriveNextAction({ initialized, careAvailability })
+    nextAction: deriveNextAction({ initialized, careAvailability }),
+    resourceSummary
   };
 }
 

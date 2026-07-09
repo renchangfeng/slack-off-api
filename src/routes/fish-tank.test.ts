@@ -355,12 +355,24 @@ type TestCareEvent = {
   createdAt: Date;
 };
 
+type TestResourceLedger = {
+  userId: string;
+  resourceType: string;
+  quantity: number;
+  sourceType: string;
+  sourceId: string | null;
+  idempotencyKey: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: Date;
+};
+
 type TestStore = ReturnType<typeof createStore>;
 
 function createStore() {
   const userTank = new Map<string, TestTank>();
   const userFish = new Map<string, TestFish>();
   const careEvents: TestCareEvent[] = [];
+  const resourceLedger: TestResourceLedger[] = [];
   const auditEvents: Array<Record<string, unknown>> = [];
 
   const starterDefinition = {
@@ -378,7 +390,7 @@ function createStore() {
     updatedAt: new Date()
   };
 
-  return { userTank, userFish, careEvents, auditEvents, starterDefinition };
+  return { userTank, userFish, careEvents, resourceLedger, auditEvents, starterDefinition };
 }
 
 function createPrismaMock(store: TestStore) {
@@ -470,6 +482,45 @@ function createPrismaMock(store: TestStore) {
         };
         store.careEvents.push(event);
         return event;
+      }
+    },
+    fishTankResourceLedger: {
+      upsert: async ({
+        where,
+        create
+      }: {
+        where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } };
+        create: TestResourceLedger;
+      }) => {
+        const existing = store.resourceLedger.find(
+          (entry) =>
+            entry.userId === where.userId_idempotencyKey.userId &&
+            entry.idempotencyKey === where.userId_idempotencyKey.idempotencyKey
+        );
+        if (existing) {
+          return existing;
+        }
+        const entry = { ...create, createdAt: create.createdAt ?? new Date() };
+        store.resourceLedger.push(entry);
+        return entry;
+      },
+      groupBy: async ({
+        where
+      }: {
+        by: string[];
+        where: { userId: string };
+        _sum: { quantity: boolean };
+      }) => {
+        const groups = new Map<string, number>();
+        for (const entry of store.resourceLedger) {
+          if (entry.userId === where.userId) {
+            groups.set(entry.resourceType, (groups.get(entry.resourceType) ?? 0) + entry.quantity);
+          }
+        }
+        return Array.from(groups.entries()).map(([resourceType, quantity]) => ({
+          resourceType,
+          _sum: { quantity }
+        }));
       }
     },
     auditEvent: {
