@@ -138,40 +138,41 @@ enum FishTankResourceType {
 }
 
 model User {
-  id                  String               @id @default(uuid()) @db.Uuid
-  authSubject         String               @unique @map("auth_subject")
-  email               String?              @unique
-  displayName         String               @map("display_name")
-  friendCode          String?              @unique @map("friend_code")
-  avatarUrl           String?              @map("avatar_url")
-  createdAt           DateTime             @default(now()) @map("created_at")
-  updatedAt           DateTime             @updatedAt @map("updated_at")
-  deletedAt           DateTime?            @map("deleted_at")
-  profile             UserProfile?
-  stats               UserStats?
-  checkInSessions     CheckInSession[]
-  leaderboardScores   LeaderboardScore[]
-  rewardLedger        RewardLedger[]
-  beanInventory       BeanInventory[]
-  achievements        UserAchievement[]
-  cosmetics           UserCosmetic[]
-  activityAssignments  ActivityAssignment[]
+  id                     String                   @id @default(uuid()) @db.Uuid
+  authSubject            String                   @unique @map("auth_subject")
+  email                  String?                  @unique
+  displayName            String                   @map("display_name")
+  friendCode             String?                  @unique @map("friend_code")
+  avatarUrl              String?                  @map("avatar_url")
+  createdAt              DateTime                 @default(now()) @map("created_at")
+  updatedAt              DateTime                 @updatedAt @map("updated_at")
+  deletedAt              DateTime?                @map("deleted_at")
+  profile                UserProfile?
+  stats                  UserStats?
+  checkInSessions        CheckInSession[]
+  leaderboardScores      LeaderboardScore[]
+  rewardLedger           RewardLedger[]
+  beanInventory          BeanInventory[]
+  achievements           UserAchievement[]
+  cosmetics              UserCosmetic[]
+  activityAssignments    ActivityAssignment[]
   activityFeedbackEvents ActivityFeedbackEvent[]
-  progressionPeriods  ProgressionGoalPeriod[]
-  beanShowcase        BeanShowcase[]
-  actorAuditEvents    AuditEvent[]         @relation("AuditActor")
-  targetAuditEvents   AuditEvent[]         @relation("AuditTarget")
-  friendshipsAsA      Friendship[]         @relation("FriendshipUserA")
-  friendshipsAsB      Friendship[]         @relation("FriendshipUserB")
-  ownedSquads          Squad[]              @relation("SquadOwner")
-  squadMembership     SquadMembership?
-  ownedCompanies      Company[]            @relation("CompanyOwner")
-  companyMembership   CompanyMembership?
-  sentReactions       SocialReaction[]      @relation("ReactionSender")
-  receivedReactions   SocialReaction[]      @relation("ReactionRecipient")
-  userTank            UserTank?
-  userFishes          UserFish[]
-  fishCareEvents      FishCareEvent[]
+  progressionPeriods     ProgressionGoalPeriod[]
+  beanShowcase           BeanShowcase[]
+  actorAuditEvents       AuditEvent[]             @relation("AuditActor")
+  targetAuditEvents      AuditEvent[]             @relation("AuditTarget")
+  friendshipsAsA         Friendship[]             @relation("FriendshipUserA")
+  friendshipsAsB         Friendship[]             @relation("FriendshipUserB")
+  ownedSquads            Squad[]                  @relation("SquadOwner")
+  squadMembership        SquadMembership?
+  ownedCompanies         Company[]                @relation("CompanyOwner")
+  companyMembership      CompanyMembership?
+  sentReactions          SocialReaction[]         @relation("ReactionSender")
+  receivedReactions      SocialReaction[]         @relation("ReactionRecipient")
+  userTank               UserTank?
+  userFishes             UserFish[]
+  fishCareEvents         FishCareEvent[]
+  fishHatchEvents        FishHatchEvent[]
   fishTankResourceLedger FishTankResourceLedger[]
 
   @@map("users")
@@ -512,19 +513,20 @@ model ProgressionGoalPeriod {
 }
 
 model FishDefinition {
-  id          String     @id @default(uuid()) @db.Uuid
-  code        String     @unique
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique
   name        String
   rarity      FishRarity
   theme       FishTheme
   personality String
-  artKey      String     @map("art_key")
-  sourceHint  String     @map("source_hint")
-  active      Boolean    @default(true)
-  sortOrder   Int        @default(0) @map("sort_order")
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
+  artKey      String           @map("art_key")
+  sourceHint  String           @map("source_hint")
+  active      Boolean          @default(true)
+  sortOrder   Int              @default(0) @map("sort_order")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
   userFishes  UserFish[]
+  hatchEvents FishHatchEvent[]
 
   @@map("fish_definitions")
 }
@@ -568,6 +570,25 @@ model FishCareEvent {
   @@unique([userId, idempotencyKey])
   @@index([userId, interactionType, createdAt])
   @@map("fish_care_events")
+}
+
+model FishHatchEvent {
+  id               String         @id @default(uuid()) @db.Uuid
+  userId           String         @map("user_id") @db.Uuid
+  fishDefinitionId String         @map("fish_definition_id") @db.Uuid
+  idempotencyKey   String         @map("idempotency_key")
+  hatchCost        Int            @map("hatch_cost")
+  outcomeCode      String         @map("outcome_code")
+  duplicate        Boolean        @default(false)
+  resultMetadata   Json           @map("result_metadata")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  user             User           @relation(fields: [userId], references: [id])
+  definition       FishDefinition @relation(fields: [fishDefinitionId], references: [id])
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([fishDefinitionId])
+  @@map("fish_hatch_events")
 }
 
 model FishTankResourceLedger {

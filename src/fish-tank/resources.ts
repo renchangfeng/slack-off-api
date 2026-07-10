@@ -128,6 +128,61 @@ export async function grantResourcesFromBeanDraw(
   return outcomes;
 }
 
+export async function getHatchProgressBalance(
+  prisma: PrismaClientLike,
+  userId: string
+): Promise<number> {
+  const result = await prisma.fishTankResourceLedger.aggregate({
+    where: { userId, resourceType: FishTankResourceType.hatch_progress },
+    _sum: { quantity: true }
+  });
+  return result._sum.quantity ?? 0;
+}
+
+export async function debitHatchProgress(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: {
+    cost: number;
+    hatchEventId: string;
+    idempotencyKey: string;
+  }
+): Promise<{ previousBalance: number; newBalance: number }> {
+  const previousBalance = await getHatchProgressBalance(prisma, userId);
+  if (previousBalance < input.cost) {
+    throw new FishTankResourceError("INSUFFICIENT_HATCH_PROGRESS", "Not enough hatch progress");
+  }
+
+  const ledgerIdempotencyKey = `hatch_debit:${input.idempotencyKey}`;
+
+  await prisma.fishTankResourceLedger.upsert({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: ledgerIdempotencyKey } },
+    create: {
+      userId,
+      resourceType: FishTankResourceType.hatch_progress,
+      quantity: -input.cost,
+      sourceType: "hatch",
+      sourceId: input.hatchEventId,
+      idempotencyKey: ledgerIdempotencyKey,
+      metadata: { hatchEventId: input.hatchEventId, cost: input.cost }
+    },
+    update: {}
+  });
+
+  const newBalance = previousBalance - input.cost;
+  return { previousBalance, newBalance };
+}
+
+export class FishTankResourceError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "FishTankResourceError";
+  }
+}
+
 export async function getResourceSummary(
   prisma: PrismaClientLike,
   userId: string

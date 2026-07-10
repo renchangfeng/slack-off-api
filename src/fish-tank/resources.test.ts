@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
-import { FishTankResourceType, grantResourcesFromBeanDraw, getResourceSummary } from "./resources.js";
+import {
+  FishTankResourceType,
+  FishTankResourceError,
+  debitHatchProgress,
+  getHatchProgressBalance,
+  grantResourcesFromBeanDraw,
+  getResourceSummary
+} from "./resources.js";
 
 describe("fish tank resources", () => {
   function createMockPrisma(initial: Array<{ resourceType: FishTankResourceType; quantity: number }> = []) {
@@ -38,6 +45,12 @@ describe("fish tank resources", () => {
             resourceType,
             _sum: { quantity }
           }));
+        }),
+        aggregate: vi.fn(async ({ where }: { where: { userId: string; resourceType: FishTankResourceType }; _sum: { quantity: boolean } }) => {
+          const total = ledger
+            .filter((entry) => entry.userId === where.userId && entry.resourceType === where.resourceType)
+            .reduce((sum, entry) => sum + entry.quantity, 0);
+          return { _sum: { quantity: total } };
         })
       }
     };
@@ -154,5 +167,78 @@ describe("fish tank resources", () => {
     expect(summary.totalBubbles).toBe(0);
     expect(summary.totalHatchProgress).toBe(0);
     expect(summary.resources.every((r) => r.quantity === 0)).toBe(true);
+  });
+
+  describe("hatch progress debit", () => {
+    it("debits hatch progress and returns new balance", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.hatch_progress, quantity: 5 }
+      ]);
+
+      const result = await debitHatchProgress(prisma, "user-1", {
+        cost: 3,
+        hatchEventId: "hatch-1",
+        idempotencyKey: "debit-key-1"
+      });
+
+      expect(result.previousBalance).toBe(5);
+      expect(result.newBalance).toBe(2);
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalHatchProgress).toBe(2);
+    });
+
+    it("rejects debit when balance is insufficient", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.hatch_progress, quantity: 2 }
+      ]);
+
+      await expect(
+        debitHatchProgress(prisma, "user-1", {
+          cost: 3,
+          hatchEventId: "hatch-1",
+          idempotencyKey: "debit-key-1"
+        })
+      ).rejects.toBeInstanceOf(FishTankResourceError);
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalHatchProgress).toBe(2);
+    });
+
+    it("does not double-debit on replay", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.hatch_progress, quantity: 6 }
+      ]);
+
+      await debitHatchProgress(prisma, "user-1", {
+        cost: 3,
+        hatchEventId: "hatch-1",
+        idempotencyKey: "debit-key-1"
+      });
+      await debitHatchProgress(prisma, "user-1", {
+        cost: 3,
+        hatchEventId: "hatch-1",
+        idempotencyKey: "debit-key-1"
+      });
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalHatchProgress).toBe(3);
+    });
+
+    it("isolates balances between users", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.hatch_progress, quantity: 5 }
+      ]);
+
+      await expect(
+        debitHatchProgress(prisma, "user-2", {
+          cost: 1,
+          hatchEventId: "hatch-1",
+          idempotencyKey: "debit-key-1"
+        })
+      ).rejects.toBeInstanceOf(FishTankResourceError);
+
+      const user1Balance = await getHatchProgressBalance(prisma, "user-1");
+      expect(user1Balance).toBe(5);
+    });
   });
 });

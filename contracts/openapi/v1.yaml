@@ -1368,7 +1368,7 @@ components:
                 $ref: "#/components/schemas/AchievementUnlock"
     FishTankSummary:
       type: object
-      required: [initialized, fish, careAvailability, moodCopy, nextAction, resourceSummary]
+      required: [initialized, fish, careAvailability, hatchAvailability, collection, moodCopy, nextAction, resourceSummary]
       properties:
         initialized:
           type: boolean
@@ -1378,11 +1378,15 @@ components:
             $ref: "#/components/schemas/FishTankFish"
         careAvailability:
           $ref: "#/components/schemas/FishTankCareAvailability"
+        hatchAvailability:
+          $ref: "#/components/schemas/FishTankHatchAvailability"
+        collection:
+          $ref: "#/components/schemas/FishCollectionSummary"
         moodCopy:
           type: string
         nextAction:
           type: string
-          enum: [initialize, feed, wait]
+          enum: [initialize, feed, hatch, wait]
         resourceSummary:
           $ref: "#/components/schemas/FishTankResourceSummary"
     FishTankFish:
@@ -1428,6 +1432,96 @@ components:
             cooldownRemainingSeconds:
               type: integer
               minimum: 0
+    FishTankHatchAvailability:
+      type: object
+      required: [available, reason, currentProgress, cost, missingProgress]
+      properties:
+        available:
+          type: boolean
+        reason:
+          type: string
+        currentProgress:
+          type: integer
+          minimum: 0
+        cost:
+          type: integer
+          minimum: 1
+        missingProgress:
+          type: integer
+          minimum: 0
+    FishCollectionSummary:
+      type: object
+      required: [owned, total, percent, complete, items]
+      properties:
+        owned:
+          type: integer
+          minimum: 0
+        total:
+          type: integer
+          minimum: 0
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        complete:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishCollectionItem"
+    FishCollectionItem:
+      type: object
+      required: [definitionId, sourceHint, owned]
+      properties:
+        definitionId:
+          type: string
+          format: uuid
+        name:
+          type: [string, "null"]
+        rarity:
+          type: [string, "null"]
+        personality:
+          type: [string, "null"]
+        artKey:
+          type: [string, "null"]
+        sourceHint:
+          type: string
+        owned:
+          type: boolean
+    HatchRequest:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey]
+      properties:
+        idempotencyKey:
+          type: string
+          minLength: 8
+          maxLength: 128
+    HatchResult:
+      type: object
+      required: [success, replayed, discoveredFish, cost, outcomeCode, resultTitle, resultCopy, nextHint, tank]
+      properties:
+        success:
+          type: boolean
+        replayed:
+          type: boolean
+        discoveredFish:
+          anyOf:
+            - $ref: "#/components/schemas/FishTankFish"
+            - type: "null"
+        cost:
+          type: integer
+          minimum: 0
+        outcomeCode:
+          type: string
+        resultTitle:
+          type: string
+        resultCopy:
+          type: string
+        nextHint:
+          type: string
+        tank:
+          $ref: "#/components/schemas/FishTankSummary"
     CareInteractionRequest:
       type: object
       additionalProperties: false
@@ -2228,3 +2322,33 @@ paths:
           description: Unsupported interaction or invalid idempotency key
         "409":
           description: Tank not initialized or interaction on cooldown
+  /v1/fish-tank/hatch:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HatchRequest"
+      responses:
+        "200":
+          description: Hatch result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/HatchResult"
+                  error:
+                    type: "null"
+        "400":
+          description: Invalid idempotency key
+        "409":
+          description: Tank not initialized, insufficient progress, or catalog complete

@@ -1,6 +1,13 @@
-import type { FishCareEvent, Prisma, UserFish } from "@prisma/client";
+import { createHash } from "crypto";
+import type { FishCareEvent, FishDefinition, FishHatchEvent, Prisma, UserFish } from "@prisma/client";
 import type { TraceContext } from "../observability/ids.js";
-import { getResourceSummary, type FishTankResourceSummary } from "./resources.js";
+import {
+  debitHatchProgress,
+  FishTankResourceError,
+  getHatchProgressBalance,
+  getResourceSummary,
+  type FishTankResourceSummary
+} from "./resources.js";
 
 export type FishTankSummary = {
   initialized: boolean;
@@ -22,9 +29,35 @@ export type FishTankSummary = {
       cooldownRemainingSeconds: number;
     };
   };
+  hatchAvailability: HatchAvailability;
+  collection: FishCollectionSummary;
   moodCopy: string;
   nextAction: string;
   resourceSummary: FishTankResourceSummary;
+};
+
+export type HatchAvailability = {
+  available: boolean;
+  reason: string;
+  currentProgress: number;
+  cost: number;
+  missingProgress: number;
+};
+
+export type FishCollectionSummary = {
+  owned: number;
+  total: number;
+  percent: number;
+  complete: boolean;
+  items: Array<{
+    definitionId: string;
+    name: string | null;
+    rarity: string | null;
+    personality: string | null;
+    artKey: string | null;
+    sourceHint: string;
+    owned: boolean;
+  }>;
 };
 
 export type CareInteractionInput = {
@@ -38,18 +71,45 @@ export type CareInteractionResult = {
   tank: FishTankSummary;
 };
 
-type PrismaClientLike = Pick<
+export type HatchInput = {
+  idempotencyKey: string;
+};
+
+export type HatchResult = {
+  success: boolean;
+  replayed: boolean;
+  discoveredFish: FishTankSummary["fish"][number] | null;
+  cost: number;
+  outcomeCode: string;
+  resultTitle: string;
+  resultCopy: string;
+  nextHint: string;
+  tank: FishTankSummary;
+};
+
+type PrismaQueryClientLike = Pick<
   Prisma.TransactionClient,
-  "userTank" | "userFish" | "fishDefinition" | "fishCareEvent" | "fishTankResourceLedger"
+  | "userTank"
+  | "userFish"
+  | "fishDefinition"
+  | "fishCareEvent"
+  | "fishTankResourceLedger"
+  | "fishHatchEvent"
+  | "$queryRaw"
 >;
+
+export type PrismaClientLike = PrismaQueryClientLike & {
+  $transaction: <T>(fn: (tx: PrismaQueryClientLike) => Promise<T>) => Promise<T>;
+};
 
 const SUPPORTED_INTERACTION_TYPES = new Set(["feed"]);
 
 export async function getTankSummary(
-  prisma: PrismaClientLike,
+  prisma: PrismaQueryClientLike,
   userId: string,
   now: Date,
-  feedCooldownSeconds: number
+  feedCooldownSeconds: number,
+  hatchProgressCost: number
 ): Promise<FishTankSummary> {
   const [tank, fishRows, latestFeedEvent] = await Promise.all([
     prisma.userTank.findUnique({ where: { userId } }),
@@ -67,22 +127,32 @@ export async function getTankSummary(
   const initialized = Boolean(tank);
   const careAvailability = buildCareAvailability(latestFeedEvent, now, feedCooldownSeconds);
   const resourceSummary = await getResourceSummary(prisma, userId);
+  const collection = await buildCollection(prisma, userId, fishRows);
+  const hatchAvailability = buildHatchAvailability({
+    initialized,
+    hatchProgressCost,
+    currentProgress: resourceSummary.totalHatchProgress,
+    collection
+  });
 
   return {
     initialized,
     fish: fishRows.map(serializeFish),
     careAvailability,
+    hatchAvailability,
+    collection,
     moodCopy: deriveMoodCopy({ initialized, fishCount: fishRows.length, latestFeedEvent, now, careAvailability }),
-    nextAction: deriveNextAction({ initialized, careAvailability }),
+    nextAction: deriveNextAction({ initialized, careAvailability, hatchAvailability }),
     resourceSummary
   };
 }
 
 export async function initializeTank(
-  prisma: PrismaClientLike,
+  prisma: PrismaQueryClientLike,
   userId: string,
   starterFishCode: string,
   feedCooldownSeconds: number,
+  hatchProgressCost: number,
   now: Date,
   trace: TraceContext
 ): Promise<{ summary: FishTankSummary; created: boolean }> {
@@ -118,16 +188,17 @@ export async function initializeTank(
   });
 
   return {
-    summary: await getTankSummary(prisma, userId, now, feedCooldownSeconds),
+    summary: await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost),
     created: !existingTank
   };
 }
 
 export async function performCareInteraction(
-  prisma: PrismaClientLike,
+  prisma: PrismaQueryClientLike,
   userId: string,
   input: CareInteractionInput,
   feedCooldownSeconds: number,
+  hatchProgressCost: number,
   now: Date,
   trace: TraceContext
 ): Promise<CareInteractionResult> {
@@ -144,7 +215,7 @@ export async function performCareInteraction(
   });
 
   if (existingEvent) {
-    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds);
+    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
     const metadata = existingEvent.resultMetadata as Record<string, unknown>;
     return {
       success: true,
@@ -165,7 +236,7 @@ export async function performCareInteraction(
 
   const cooldownRemaining = calculateCooldownRemaining(latestEvent, now, feedCooldownSeconds);
   if (cooldownRemaining > 0) {
-    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds);
+    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
     return {
       success: false,
       resultCopy: "它刚刚吃饱，正在假装工作。",
@@ -183,7 +254,7 @@ export async function performCareInteraction(
     }
   });
 
-  const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds);
+  const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
   return { success: true, resultCopy, tank: summary };
 }
 
@@ -274,12 +345,16 @@ function deriveMoodCopy(input: {
 function deriveNextAction(input: {
   initialized: boolean;
   careAvailability: FishTankSummary["careAvailability"];
+  hatchAvailability: HatchAvailability;
 }): string {
   if (!input.initialized) {
     return "initialize";
   }
   if (input.careAvailability.feed.available) {
     return "feed";
+  }
+  if (input.hatchAvailability.available) {
+    return "hatch";
   }
   return "wait";
 }
@@ -289,4 +364,311 @@ function deriveCareResultCopy(interactionType: string): string {
     return "投喂成功，小鱼看起来很满意。";
   }
   return "互动完成。";
+}
+
+async function buildCollection(
+  prisma: PrismaQueryClientLike,
+  userId: string,
+  ownedFishRows: Array<UserFish & { definition: { id: string; code: string; name: string; rarity: string; theme: string; personality: string; artKey: string; sourceHint: string; active: boolean } }>
+): Promise<FishCollectionSummary> {
+  const allDefinitions = await prisma.fishDefinition.findMany({
+    where: { active: true },
+    orderBy: { sortOrder: "asc" }
+  });
+
+  const ownedDefinitionIds = new Set(ownedFishRows.map((row) => row.definition.id));
+  const items = allDefinitions.map((definition) =>
+    serializeCollectionItem(definition, ownedDefinitionIds.has(definition.id))
+  );
+
+  const owned = items.filter((item) => item.owned).length;
+  const total = items.length;
+
+  return {
+    owned,
+    total,
+    percent: total > 0 ? Math.round((owned / total) * 100) : 0,
+    complete: total > 0 && owned === total,
+    items
+  };
+}
+
+function serializeCollectionItem(
+  definition: FishDefinition,
+  owned: boolean
+): FishCollectionSummary["items"][number] {
+  if (owned) {
+    return {
+      definitionId: definition.id,
+      name: definition.name,
+      rarity: definition.rarity,
+      personality: definition.personality,
+      artKey: definition.artKey,
+      sourceHint: definition.sourceHint,
+      owned: true
+    };
+  }
+
+  return {
+    definitionId: definition.id,
+    name: null,
+    rarity: null,
+    personality: null,
+    artKey: null,
+    sourceHint: definition.sourceHint,
+    owned: false
+  };
+}
+
+function buildHatchAvailability(input: {
+  initialized: boolean;
+  hatchProgressCost: number;
+  currentProgress: number;
+  collection: FishCollectionSummary;
+}): HatchAvailability {
+  if (!input.initialized) {
+    return {
+      available: false,
+      reason: "tank_not_initialized",
+      currentProgress: input.currentProgress,
+      cost: input.hatchProgressCost,
+      missingProgress: Math.max(0, input.hatchProgressCost - input.currentProgress)
+    };
+  }
+
+  if (input.collection.complete) {
+    return {
+      available: false,
+      reason: "catalog_complete",
+      currentProgress: input.currentProgress,
+      cost: input.hatchProgressCost,
+      missingProgress: 0
+    };
+  }
+
+  if (input.currentProgress < input.hatchProgressCost) {
+    return {
+      available: false,
+      reason: "insufficient_progress",
+      currentProgress: input.currentProgress,
+      cost: input.hatchProgressCost,
+      missingProgress: input.hatchProgressCost - input.currentProgress
+    };
+  }
+
+  return {
+    available: true,
+    reason: "ready",
+    currentProgress: input.currentProgress,
+    cost: input.hatchProgressCost,
+    missingProgress: 0
+  };
+}
+
+export async function performHatch(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: HatchInput,
+  hatchProgressCost: number,
+  feedCooldownSeconds: number,
+  now: Date,
+  trace: TraceContext
+): Promise<HatchResult> {
+  if (!input.idempotencyKey || input.idempotencyKey.length < 8 || input.idempotencyKey.length > 128) {
+    throw new FishTankError("INVALID_IDEMPOTENCY_KEY", "Idempotency key must be between 8 and 128 characters");
+  }
+
+  const tank = await prisma.userTank.findUnique({ where: { userId } });
+  if (!tank) {
+    throw new FishTankError("TANK_NOT_INITIALIZED", "Initialize your fish tank before hatching");
+  }
+
+  const existingEvent = await prisma.fishHatchEvent.findUnique({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: input.idempotencyKey } }
+  });
+
+  if (existingEvent) {
+    return buildHatchReplayResult(prisma, userId, existingEvent, now, feedCooldownSeconds, hatchProgressCost);
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT * FROM user_tanks WHERE user_id = ${userId}::uuid FOR UPDATE`;
+
+    const existingEventAfterLock = await tx.fishHatchEvent.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey: input.idempotencyKey } }
+    });
+
+    if (existingEventAfterLock) {
+      return buildHatchReplayResult(
+        tx,
+        userId,
+        existingEventAfterLock,
+        now,
+        feedCooldownSeconds,
+        hatchProgressCost
+      );
+    }
+
+    const currentProgress = await getHatchProgressBalance(tx, userId);
+    if (currentProgress < hatchProgressCost) {
+      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+      return {
+        success: false,
+        replayed: false,
+        discoveredFish: null,
+        cost: 0,
+        outcomeCode: "INSUFFICIENT_HATCH_PROGRESS",
+        resultTitle: "孵化进度不足",
+        resultCopy: `还需要 ${hatchProgressCost - currentProgress} 点孵化进度才能召唤新邻居。`,
+        nextHint: "去抽豆或完成活动，继续攒孵化进度。",
+        tank: summary
+      };
+    }
+
+    const ownedFishRows = await tx.userFish.findMany({
+      where: { userId },
+      select: { fishDefinitionId: true }
+    });
+    const ownedDefinitionIds = new Set(ownedFishRows.map((row) => row.fishDefinitionId));
+
+    const eligibleDefinitions = await tx.fishDefinition.findMany({
+      where: {
+        active: true,
+        NOT: { code: "starter_goldfish" }
+      },
+      orderBy: { sortOrder: "asc" }
+    });
+
+    const undiscovered = eligibleDefinitions.filter((def) => !ownedDefinitionIds.has(def.id));
+
+    if (undiscovered.length === 0) {
+      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+      return {
+        success: false,
+        replayed: false,
+        discoveredFish: null,
+        cost: 0,
+        outcomeCode: "FISH_CATALOG_COMPLETE",
+        resultTitle: "图鉴已集齐",
+        resultCopy: "当前所有可召唤的鱼都已经在缸里，等新鱼加入吧。",
+        nextHint: "继续照顾现有的小鱼。",
+        tank: summary
+      };
+    }
+
+    const selectedDefinition = selectHatchCandidate(undiscovered, userId, input.idempotencyKey);
+
+    const existingOwnership = await tx.userFish.findUnique({
+      where: { userId_fishDefinitionId: { userId, fishDefinitionId: selectedDefinition.id } }
+    });
+
+    if (existingOwnership) {
+      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+      return {
+        success: true,
+        replayed: false,
+        discoveredFish: serializeFish({
+          ...existingOwnership,
+          definition: selectedDefinition
+        }),
+        cost: 0,
+        outcomeCode: "ALREADY_OWNED",
+        resultTitle: "这条鱼已经在缸里",
+        resultCopy: "它早就住进来了，进度没有变化。",
+        nextHint: "看看鱼缸或者继续攒进度。",
+        tank: summary
+      };
+    }
+
+    const hatchEvent = await tx.fishHatchEvent.create({
+      data: {
+        userId,
+        fishDefinitionId: selectedDefinition.id,
+        idempotencyKey: input.idempotencyKey,
+        hatchCost: hatchProgressCost,
+        outcomeCode: "DISCOVERED",
+        duplicate: false,
+        resultMetadata: {
+          fishCode: selectedDefinition.code,
+          fishName: selectedDefinition.name,
+          requestId: trace.requestId
+        }
+      }
+    });
+
+    await debitHatchProgress(tx, userId, {
+      cost: hatchProgressCost,
+      hatchEventId: hatchEvent.id,
+      idempotencyKey: input.idempotencyKey
+    });
+
+    const userFish = await tx.userFish.create({
+      data: {
+        userId,
+        fishDefinitionId: selectedDefinition.id,
+        acquiredSource: "hatch",
+        displayOrder: ownedFishRows.length
+      },
+      include: { definition: true }
+    });
+
+    const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+    return {
+      success: true,
+      replayed: false,
+      discoveredFish: serializeFish(userFish),
+      cost: hatchProgressCost,
+      outcomeCode: "DISCOVERED",
+      resultTitle: "新鱼登场",
+      resultCopy: `${selectedDefinition.name} 从进度里游了出来，鱼缸又热闹了一点。`,
+      nextHint: "返回鱼缸看看新邻居，或者继续攒进度。",
+      tank: summary
+    };
+  });
+}
+
+function selectHatchCandidate(
+  eligibleDefinitions: FishDefinition[],
+  userId: string,
+  idempotencyKey: string
+): FishDefinition {
+  const hash = createHash("sha256")
+    .update(`${userId}:${idempotencyKey}`)
+    .digest("hex");
+  const index = Number.parseInt(hash.slice(0, 16), 16) % eligibleDefinitions.length;
+  return eligibleDefinitions[index];
+}
+
+async function buildHatchReplayResult(
+  prisma: PrismaQueryClientLike,
+  userId: string,
+  event: FishHatchEvent,
+  now: Date,
+  feedCooldownSeconds: number,
+  hatchProgressCost: number
+): Promise<HatchResult> {
+  const [summary, ownership] = await Promise.all([
+    getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost),
+    prisma.userFish.findUnique({
+      where: {
+        userId_fishDefinitionId: {
+          userId,
+          fishDefinitionId: event.fishDefinitionId
+        }
+      },
+      include: { definition: true }
+    })
+  ]);
+
+  return {
+    success: true,
+    replayed: true,
+    discoveredFish: ownership ? serializeFish(ownership) : null,
+    cost: event.hatchCost,
+    outcomeCode: event.outcomeCode,
+    resultTitle: "孵化结果已保存",
+    resultCopy: "这条鱼已经在你缸里了，不用再花进度。",
+    nextHint: "看看鱼缸或者继续攒进度。",
+    tank: summary
+  };
 }

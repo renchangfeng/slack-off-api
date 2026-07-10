@@ -8,6 +8,10 @@ import type { RuntimeConfig } from "../config/runtime.js";
 const userId = "11111111-1111-4111-8111-111111111111";
 const otherUserId = "22222222-2222-4222-8222-222222222222";
 const starterFishId = "33333333-3333-4333-8333-333333333333";
+const printerPeaceId = "44444444-4444-4444-8444-444444444444";
+const stallSageId = "55555555-5555-4555-8555-555555555555";
+const cloudMeetingId = "66666666-6666-4666-8666-666666666666";
+const moonlightAnglerId = "77777777-7777-4777-8777-777777777777";
 
 const runtimeConfig: RuntimeConfig = {
   rateLimits: {
@@ -29,7 +33,7 @@ const runtimeConfig: RuntimeConfig = {
     drawProgressPerSession: 1
   },
   beans: { drawProgressPerChance: 3 },
-  fishTank: { starterFishCode: "starter_goldfish", feedCooldownSeconds: 4 * 60 * 60 }
+  fishTank: { starterFishCode: "starter_goldfish", feedCooldownSeconds: 4 * 60 * 60, hatchProgressCost: 3 }
 };
 
 describe("fish tank routes", () => {
@@ -315,7 +319,286 @@ describe("fish tank routes", () => {
 
     await server.close();
   });
+
+  it("rejects hatch when tank is not initialized", async () => {
+    const server = await buildTestServer(store);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "hatch_key_1" }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("TANK_NOT_INITIALIZED");
+    expect(store.hatchEvents).toHaveLength(0);
+    expect(store.resourceLedger).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("rejects hatch when progress is insufficient without mutation", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "hatch_key_1" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      success: false,
+      outcomeCode: "INSUFFICIENT_HATCH_PROGRESS",
+      cost: 0
+    });
+    expect(store.hatchEvents).toHaveLength(0);
+    expect(store.resourceLedger).toHaveLength(0);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "fish_tank.hatch.insufficient_progress" })])
+    );
+
+    await server.close();
+  });
+
+  it("hatches a new fish and records debit, ownership, and idempotent replay", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    grantHatchProgress(store, userId, 5);
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "hatch_key_1" }
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data).toMatchObject({
+      success: true,
+      replayed: false,
+      cost: 3,
+      outcomeCode: "DISCOVERED"
+    });
+    const discoveredFishId = first.json().data.discoveredFish?.definitionId;
+    const discoveredOwnershipId = first.json().data.discoveredFish?.id;
+    expect(discoveredFishId).toBeDefined();
+    expect(discoveredOwnershipId).toBeDefined();
+    expect(store.hatchEvents).toHaveLength(1);
+    expect(store.userFish.size).toBe(2);
+    expect(getHatchProgressTotal(store, userId)).toBe(2);
+
+    const second = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "hatch_key_1" }
+    });
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data).toMatchObject({
+      success: true,
+      replayed: true,
+      cost: 3,
+      discoveredFish: expect.objectContaining({
+        id: discoveredOwnershipId,
+        definitionId: discoveredFishId
+      })
+    });
+    expect(store.hatchEvents).toHaveLength(1);
+    expect(store.userFish.size).toBe(2);
+    expect(getHatchProgressTotal(store, userId)).toBe(2);
+
+    await server.close();
+  });
+
+  it("reports catalog complete without spending progress", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${userId}:${printerPeaceId}`, {
+      id: "fish-2",
+      userId,
+      fishDefinitionId: printerPeaceId,
+      acquiredSource: "hatch",
+      displayOrder: 1,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${userId}:${stallSageId}`, {
+      id: "fish-3",
+      userId,
+      fishDefinitionId: stallSageId,
+      acquiredSource: "hatch",
+      displayOrder: 2,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${userId}:${cloudMeetingId}`, {
+      id: "fish-4",
+      userId,
+      fishDefinitionId: cloudMeetingId,
+      acquiredSource: "hatch",
+      displayOrder: 3,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${userId}:${moonlightAnglerId}`, {
+      id: "fish-5",
+      userId,
+      fishDefinitionId: moonlightAnglerId,
+      acquiredSource: "hatch",
+      displayOrder: 4,
+      createdAt: new Date()
+    });
+    grantHatchProgress(store, userId, 10);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "hatch_complete_1" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      success: false,
+      outcomeCode: "FISH_CATALOG_COMPLETE",
+      cost: 0
+    });
+    expect(getHatchProgressTotal(store, userId)).toBe(10);
+    expect(store.hatchEvents).toHaveLength(0);
+
+    await server.close();
+  });
+
+  it("selects fish deterministically from user id and idempotency key", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    grantHatchProgress(store, userId, 6);
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "stable_key_a" }
+    });
+    const firstId = first.json().data.discoveredFish?.definitionId;
+
+    // Reset ownership but keep same key; selection should land on the same fish
+    store.userFish.clear();
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.hatchEvents.length = 0;
+    store.resourceLedger.length = 0;
+    grantHatchProgress(store, userId, 6);
+
+    const second = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "stable_key_a" }
+    });
+
+    expect(second.json().data.discoveredFish?.definitionId).toBe(firstId);
+
+    await server.close();
+  });
+
+  it("isolates hatch state between users", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userTank.set(otherUserId, { userId: otherUserId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${otherUserId}:${starterFishId}`, {
+      id: "fish-other",
+      userId: otherUserId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    grantHatchProgress(store, userId, 3);
+    grantHatchProgress(store, otherUserId, 3);
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/hatch",
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "shared_key" }
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.success).toBe(true);
+    expect(getHatchProgressTotal(store, userId)).toBe(0);
+    expect(getHatchProgressTotal(store, otherUserId)).toBe(3);
+
+    await server.close();
+  });
 });
+
+function grantHatchProgress(store: TestStore, targetUserId: string, amount: number) {
+  store.resourceLedger.push({
+    userId: targetUserId,
+    resourceType: "hatch_progress",
+    quantity: amount,
+    sourceType: "bean_draw",
+    sourceId: null,
+    idempotencyKey: `grant_${targetUserId}_${store.resourceLedger.length}`,
+    metadata: {},
+    createdAt: new Date()
+  });
+}
+
+function getHatchProgressTotal(store: TestStore, targetUserId: string): number {
+  return store.resourceLedger
+    .filter((entry) => entry.userId === targetUserId && entry.resourceType === "hatch_progress")
+    .reduce((sum, entry) => sum + entry.quantity, 0);
+}
 
 async function buildTestServer(store: TestStore) {
   const server = Fastify({ logger: false });
@@ -355,6 +638,33 @@ type TestCareEvent = {
   createdAt: Date;
 };
 
+type TestFishDefinition = {
+  id: string;
+  code: string;
+  name: string;
+  rarity: string;
+  theme: string;
+  personality: string;
+  artKey: string;
+  sourceHint: string;
+  active: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type TestHatchEvent = {
+  id: string;
+  userId: string;
+  fishDefinitionId: string;
+  idempotencyKey: string;
+  hatchCost: number;
+  outcomeCode: string;
+  duplicate: boolean;
+  resultMetadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 type TestResourceLedger = {
   userId: string;
   resourceType: string;
@@ -372,28 +682,115 @@ function createStore() {
   const userTank = new Map<string, TestTank>();
   const userFish = new Map<string, TestFish>();
   const careEvents: TestCareEvent[] = [];
+  const hatchEvents: TestHatchEvent[] = [];
   const resourceLedger: TestResourceLedger[] = [];
   const auditEvents: Array<Record<string, unknown>> = [];
 
-  const starterDefinition = {
-    id: starterFishId,
-    code: "starter_goldfish",
-    name: "摸鱼初心小金",
-    rarity: "common",
-    theme: "daydream",
-    personality: "假装工作的",
-    artKey: "fish-starter-goldfish",
-    sourceHint: "starter",
-    active: true,
-    sortOrder: 1,
-    createdAt: new Date(),
-    updatedAt: new Date()
-  };
+  const definitions = new Map<string, TestFishDefinition>([
+    [
+      "starter_goldfish",
+      {
+        id: starterFishId,
+        code: "starter_goldfish",
+        name: "摸鱼初心小金",
+        rarity: "common",
+        theme: "daydream",
+        personality: "假装工作的",
+        artKey: "fish-starter-goldfish",
+        sourceHint: "starter",
+        active: true,
+        sortOrder: 1,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "printer_peace_beta",
+      {
+        id: printerPeaceId,
+        code: "printer_peace_beta",
+        name: "打印机和平贝塔",
+        rarity: "common",
+        theme: "office",
+        personality: "宽容卡纸的",
+        artKey: "fish-printer-peace-beta",
+        sourceHint: "hatch",
+        active: true,
+        sortOrder: 2,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "stall_sage_koi",
+      {
+        id: stallSageId,
+        code: "stall_sage_koi",
+        name: "隔间贤者鲤",
+        rarity: "uncommon",
+        theme: "restroom",
+        personality: "在安静隔间顿悟的",
+        artKey: "fish-stall-sage-koi",
+        sourceHint: "hatch",
+        active: true,
+        sortOrder: 3,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "cloud_meeting_guppy",
+      {
+        id: cloudMeetingId,
+        code: "cloud_meeting_guppy",
+        name: "云端会议鳉",
+        rarity: "rare",
+        theme: "daydream",
+        personality: "会议链接永远找不到的",
+        artKey: "fish-cloud-meeting-guppy",
+        sourceHint: "hatch",
+        active: true,
+        sortOrder: 4,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "moonlight_overtime_angler",
+      {
+        id: moonlightAnglerId,
+        code: "moonlight_overtime_angler",
+        name: "月光拒绝加班鮟鱇",
+        rarity: "epic",
+        theme: "daydream",
+        personality: "到点自动熄灯的",
+        artKey: "fish-moonlight-overtime-angler",
+        sourceHint: "hatch",
+        active: true,
+        sortOrder: 5,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ]
+  ]);
 
-  return { userTank, userFish, careEvents, resourceLedger, auditEvents, starterDefinition };
+  return { userTank, userFish, careEvents, hatchEvents, resourceLedger, auditEvents, starterDefinition: definitions.get("starter_goldfish")!, definitions };
 }
 
 function createPrismaMock(store: TestStore) {
+  function resolveDefinition(by: { id?: string; code?: string }): TestFishDefinition | null {
+    if (by.id) {
+      for (const def of store.definitions.values()) {
+        if (def.id === by.id) return def;
+      }
+      return null;
+    }
+    if (by.code) {
+      return store.definitions.get(by.code) ?? null;
+    }
+    return null;
+  }
+
   const prisma: Record<string, unknown> = {
     userTank: {
       findUnique: async ({ where }: { where: { userId: string } }) =>
@@ -410,20 +807,31 @@ function createPrismaMock(store: TestStore) {
       }
     },
     userFish: {
-      findMany: async ({ where, include, orderBy }: { where: { userId: string }; include?: { definition: boolean }; orderBy?: { displayOrder: string } }) => {
+      findMany: async ({ where, include }: { where: { userId: string }; include?: { definition: boolean } }) => {
         const rows = [...store.userFish.values()].filter((f) => f.userId === where.userId);
         if (include?.definition) {
-          return rows.map((f) => ({ ...f, definition: store.starterDefinition }));
+          return rows.map((f) => ({ ...f, definition: resolveDefinition({ id: f.fishDefinitionId }) ?? store.starterDefinition }));
         }
         return rows;
       },
-      create: async ({ data }: { data: Omit<TestFish, "id"> }) => {
+      findUnique: async ({ where, include }: { where: { userId_fishDefinitionId: { userId: string; fishDefinitionId: string } }; include?: { definition: boolean } }) => {
+        const key = `${where.userId_fishDefinitionId.userId}:${where.userId_fishDefinitionId.fishDefinitionId}`;
+        const fish = store.userFish.get(key) ?? null;
+        if (fish && include?.definition) {
+          return { ...fish, definition: resolveDefinition({ id: fish.fishDefinitionId }) ?? store.starterDefinition };
+        }
+        return fish;
+      },
+      create: async ({ data, include }: { data: Omit<TestFish, "id">; include?: { definition: boolean } }) => {
         const fish: TestFish = {
           ...data,
-          id: "generated-fish-id",
+          id: `fish-${store.userFish.size + 1}`,
           createdAt: data.createdAt ?? new Date()
         };
         store.userFish.set(`${data.userId}:${data.fishDefinitionId}`, fish);
+        if (include?.definition) {
+          return { ...fish, definition: resolveDefinition({ id: data.fishDefinitionId }) ?? store.starterDefinition };
+        }
         return fish;
       },
       upsert: async ({
@@ -444,7 +852,7 @@ function createPrismaMock(store: TestStore) {
         }
         const fish: TestFish = {
           ...create,
-          id: "generated-fish-id",
+          id: `fish-${store.userFish.size + 1}`,
           createdAt: create.createdAt ?? new Date()
         };
         store.userFish.set(key, fish);
@@ -452,13 +860,20 @@ function createPrismaMock(store: TestStore) {
       }
     },
     fishDefinition: {
-      findUnique: async ({ where }: { where: { code: string } }) => {
-        if (where.code === store.starterDefinition.code) return store.starterDefinition;
-        return null;
+      findUnique: async ({ where }: { where: { id?: string; code?: string } }) => resolveDefinition(where),
+      findMany: async ({ where, orderBy }: { where?: { active?: boolean }; orderBy?: { sortOrder: string } }) => {
+        let defs = [...store.definitions.values()];
+        if (where?.active !== undefined) {
+          defs = defs.filter((d) => d.active === where.active);
+        }
+        if (orderBy?.sortOrder === "asc") {
+          defs.sort((a, b) => a.sortOrder - b.sortOrder);
+        }
+        return defs;
       }
     },
     fishCareEvent: {
-      findFirst: async ({ where, orderBy }: { where: { userId: string; interactionType: string }; orderBy: { createdAt: string } }) => {
+      findFirst: async ({ where }: { where: { userId: string; interactionType: string }; orderBy: { createdAt: string } }) => {
         return (
           store.careEvents
             .filter((e) => e.userId === where.userId && e.interactionType === where.interactionType)
@@ -481,6 +896,26 @@ function createPrismaMock(store: TestStore) {
           createdAt: data.createdAt ?? new Date()
         };
         store.careEvents.push(event);
+        return event;
+      }
+    },
+    fishHatchEvent: {
+      findUnique: async ({ where }: { where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } } }) => {
+        return (
+          store.hatchEvents.find(
+            (e) =>
+              e.userId === where.userId_idempotencyKey.userId &&
+              e.idempotencyKey === where.userId_idempotencyKey.idempotencyKey
+          ) ?? null
+        );
+      },
+      create: async ({ data }: { data: Omit<TestHatchEvent, "id"> }) => {
+        const event: TestHatchEvent = {
+          ...data,
+          id: `hatch-${store.hatchEvents.length + 1}`,
+          createdAt: data.createdAt ?? new Date()
+        };
+        store.hatchEvents.push(event);
         return event;
       }
     },
@@ -521,6 +956,20 @@ function createPrismaMock(store: TestStore) {
           resourceType,
           _sum: { quantity }
         }));
+      },
+      aggregate: async ({
+        where
+      }: {
+        where: { userId: string; resourceType: string };
+        _sum: { quantity: boolean };
+      }) => {
+        let total = 0;
+        for (const entry of store.resourceLedger) {
+          if (entry.userId === where.userId && entry.resourceType === where.resourceType) {
+            total += entry.quantity;
+          }
+        }
+        return { _sum: { quantity: total } };
       }
     },
     auditEvent: {
@@ -529,6 +978,7 @@ function createPrismaMock(store: TestStore) {
         return data;
       }
     },
+    $queryRaw: async () => [{ userId }],
     $transaction: async <T>(fn: (tx: Record<string, unknown>) => Promise<T>) => fn(prisma)
   };
 

@@ -32,7 +32,8 @@ const runtimeConfigSchema = z.object({
   }),
   fishTank: z.object({
     starterFishCode: z.string(),
-    feedCooldownSeconds: z.number().int().positive()
+    feedCooldownSeconds: z.number().int().positive(),
+    hatchProgressCost: z.number().int().positive()
   })
 });
 
@@ -65,7 +66,8 @@ const defaults: RuntimeConfig = {
   },
   fishTank: {
     starterFishCode: "starter_goldfish",
-    feedCooldownSeconds: 4 * 60 * 60
+    feedCooldownSeconds: 4 * 60 * 60,
+    hatchProgressCost: 3
   }
 };
 

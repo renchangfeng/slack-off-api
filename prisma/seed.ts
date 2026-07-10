@@ -155,6 +155,46 @@ const fishDefinitions = [
     artKey: "fish-starter-goldfish",
     sourceHint: "starter",
     sortOrder: 1
+  },
+  {
+    code: "printer_peace_beta",
+    name: "打印机和平贝塔",
+    rarity: FishRarity.common,
+    theme: FishTheme.office,
+    personality: "宽容卡纸的",
+    artKey: "fish-printer-peace-beta",
+    sourceHint: "hatch",
+    sortOrder: 2
+  },
+  {
+    code: "stall_sage_koi",
+    name: "隔间贤者鲤",
+    rarity: FishRarity.uncommon,
+    theme: FishTheme.restroom,
+    personality: "在安静隔间顿悟的",
+    artKey: "fish-stall-sage-koi",
+    sourceHint: "hatch",
+    sortOrder: 3
+  },
+  {
+    code: "cloud_meeting_guppy",
+    name: "云端会议鳉",
+    rarity: FishRarity.rare,
+    theme: FishTheme.daydream,
+    personality: "会议链接永远找不到的",
+    artKey: "fish-cloud-meeting-guppy",
+    sourceHint: "hatch",
+    sortOrder: 4
+  },
+  {
+    code: "moonlight_overtime_angler",
+    name: "月光拒绝加班鮟鱇",
+    rarity: FishRarity.epic,
+    theme: FishTheme.daydream,
+    personality: "到点自动熄灯的",
+    artKey: "fish-moonlight-overtime-angler",
+    sourceHint: "hatch",
+    sortOrder: 5
   }
 ];
 
@@ -2334,6 +2374,8 @@ async function main() {
       );
     }
 
+    validateFishDefinitions();
+
     const flavorCounts = activities.reduce<Record<string, number>>((counts, activity) => {
       const flavor = (activity.rewardConfig as { flavor?: string }).flavor;
       if (flavor) {
@@ -2366,6 +2408,8 @@ async function main() {
     );
     return;
   }
+
+  validateFishDefinitions();
 
   for (const bean of beans) {
     await prisma.beanDefinition.upsert({
@@ -2405,6 +2449,50 @@ async function main() {
       create: activity,
       update: activity
     });
+  }
+}
+
+function validateFishDefinitions() {
+  const codes = new Set<string>();
+  const artKeys = new Set<string>();
+  let activeStarterCount = 0;
+  let activeNonStarterCount = 0;
+
+  const validThemes = new Set(Object.values(FishTheme));
+  const validRarities = new Set(Object.values(FishRarity));
+
+  for (const fish of fishDefinitions) {
+    if (codes.has(fish.code)) {
+      throw new Error(`Duplicate fish definition code: ${fish.code}`);
+    }
+    codes.add(fish.code);
+
+    if (artKeys.has(fish.artKey)) {
+      throw new Error(`Duplicate fish definition art key: ${fish.artKey}`);
+    }
+    artKeys.add(fish.artKey);
+
+    if (!validThemes.has(fish.theme)) {
+      throw new Error(`Invalid fish theme for ${fish.code}: ${fish.theme}`);
+    }
+    if (!validRarities.has(fish.rarity)) {
+      throw new Error(`Invalid fish rarity for ${fish.code}: ${fish.rarity}`);
+    }
+
+    if (fish.active !== false) {
+      if (fish.sourceHint === "starter") {
+        activeStarterCount += 1;
+      } else {
+        activeNonStarterCount += 1;
+      }
+    }
+  }
+
+  if (activeStarterCount !== 1) {
+    throw new Error(`Fish seed must contain exactly one active starter fish, found ${activeStarterCount}`);
+  }
+  if (activeNonStarterCount < 4) {
+    throw new Error(`Fish seed must contain at least four active non-starter fish, found ${activeNonStarterCount}`);
   }
 }
 
