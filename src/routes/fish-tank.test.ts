@@ -13,6 +13,13 @@ const stallSageId = "55555555-5555-4555-8555-555555555555";
 const cloudMeetingId = "66666666-6666-4666-8666-666666666666";
 const moonlightAnglerId = "77777777-7777-4777-8777-777777777777";
 
+const defaultBgId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const defaultPlantId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const defaultPropId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const defaultAmbientId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const lockedBgId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+const lockedPlantId = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+
 const runtimeConfig: RuntimeConfig = {
   rateLimits: {
     global: { max: 1000, timeWindow: "1 minute" },
@@ -579,6 +586,226 @@ describe("fish tank routes", () => {
 
     await server.close();
   });
+
+  it("equips a decoration and returns updated summary", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.ownedDecorations.set(`${userId}:${lockedBgId}`, {
+      userId,
+      decorationDefinitionId: lockedBgId,
+      quantity: 1,
+      acquiredSource: "achievement",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedBgId, idempotencyKey: "equip-bg-1" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      success: true,
+      replayed: false,
+      outcomeCode: "EQUIPPED",
+      equipped: expect.objectContaining({ code: "office_window_background", slot: "background" })
+    });
+    expect(response.json().data.tank.decorations.equipped.find((d: { slot: string }) => d.slot === "background")?.code).toBe("office_window_background");
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.decor.equip.completed",
+          metadata: expect.objectContaining({
+            userId,
+            traceId: expect.any(String),
+            replayed: false,
+            outcomeCode: "EQUIPPED"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("replays equip without duplicating mutation or audit", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.ownedDecorations.set(`${userId}:${lockedBgId}`, {
+      userId,
+      decorationDefinitionId: lockedBgId,
+      quantity: 1,
+      acquiredSource: "achievement",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    const first = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedBgId, idempotencyKey: "equip-bg-1" }
+    });
+    const second = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedBgId, idempotencyKey: "equip-bg-1" }
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.replayed).toBe(true);
+    expect(store.equipEvents).toHaveLength(1);
+    expect(store.auditEvents.filter((e) => (e.eventType as string).startsWith("fish_tank.decor.equip.completed"))).toHaveLength(1);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "fish_tank.decor.equip.replayed" })])
+    );
+
+    await server.close();
+  });
+
+  it("rejects equip when tank is not initialized", async () => {
+    const server = await buildTestServer(store);
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: defaultBgId, idempotencyKey: "equip-uninit" }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("TANK_NOT_INITIALIZED");
+
+    await server.close();
+  });
+
+  it("rejects equipping a locked decoration", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedBgId, idempotencyKey: "equip-locked" }
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("DECORATION_LOCKED");
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "fish_tank.decor.equip.rejected_locked" })])
+    );
+
+    await server.close();
+  });
+
+  it("rejects equipping into a wrong slot", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.ownedDecorations.set(`${userId}:${lockedPlantId}`, {
+      userId,
+      decorationDefinitionId: lockedPlantId,
+      quantity: 1,
+      acquiredSource: "achievement",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    const response = await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedPlantId, idempotencyKey: "equip-wrong" }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe("WRONG_DECORATION_SLOT");
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ eventType: "fish_tank.decor.equip.rejected_wrong_slot" })])
+    );
+
+    await server.close();
+  });
+
+  it("isolates equipped decoration state between users", async () => {
+    const server = await buildTestServer(store);
+    store.userTank.set(userId, { userId });
+    store.userTank.set(otherUserId, { userId: otherUserId });
+    store.userFish.set(`${userId}:${starterFishId}`, {
+      id: "fish-1",
+      userId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.userFish.set(`${otherUserId}:${starterFishId}`, {
+      id: "fish-other",
+      userId: otherUserId,
+      fishDefinitionId: starterFishId,
+      acquiredSource: "starter",
+      displayOrder: 0,
+      createdAt: new Date()
+    });
+    store.ownedDecorations.set(`${userId}:${lockedBgId}`, {
+      userId,
+      decorationDefinitionId: lockedBgId,
+      quantity: 1,
+      acquiredSource: "achievement",
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    await server.inject({
+      method: "POST",
+      url: "/v1/fish-tank/decorations/equip",
+      headers: { authorization: "Bearer test" },
+      payload: { slot: "background", decorationDefinitionId: lockedBgId, idempotencyKey: "equip-isolation" }
+    });
+
+    expect(store.equippedDecorations.size).toBe(1);
+    expect(store.equippedDecorations.has(`${userId}:background`)).toBe(true);
+    expect(store.equippedDecorations.has(`${otherUserId}:background`)).toBe(false);
+
+    await server.close();
+  });
 });
 
 function grantHatchProgress(store: TestStore, targetUserId: string, amount: number) {
@@ -676,6 +903,49 @@ type TestResourceLedger = {
   createdAt?: Date;
 };
 
+type TestDecorationDefinition = {
+  id: string;
+  code: string;
+  name: string;
+  type: string;
+  rarity: string;
+  theme: string | null;
+  artKey: string;
+  unlockHint: string;
+  active: boolean;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type TestOwnedDecoration = {
+  userId: string;
+  decorationDefinitionId: string;
+  quantity: number;
+  acquiredSource: string;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type TestEquippedDecoration = {
+  userId: string;
+  slot: string;
+  decorationDefinitionId: string;
+  equippedAt: Date;
+};
+
+type TestEquipEvent = {
+  id: string;
+  userId: string;
+  slot: string;
+  decorationDefinitionId: string;
+  idempotencyKey: string;
+  outcomeCode: string;
+  replay: boolean;
+  resultMetadata: Record<string, unknown>;
+  createdAt: Date;
+};
+
 type TestStore = ReturnType<typeof createStore>;
 
 function createStore() {
@@ -685,6 +955,9 @@ function createStore() {
   const hatchEvents: TestHatchEvent[] = [];
   const resourceLedger: TestResourceLedger[] = [];
   const auditEvents: Array<Record<string, unknown>> = [];
+  const ownedDecorations = new Map<string, TestOwnedDecoration>();
+  const equippedDecorations = new Map<string, TestEquippedDecoration>();
+  const equipEvents: TestEquipEvent[] = [];
 
   const definitions = new Map<string, TestFishDefinition>([
     [
@@ -774,7 +1047,125 @@ function createStore() {
     ]
   ]);
 
-  return { userTank, userFish, careEvents, hatchEvents, resourceLedger, auditEvents, starterDefinition: definitions.get("starter_goldfish")!, definitions };
+  const decorDefinitions = new Map<string, TestDecorationDefinition>([
+    [
+      "default_tank_background",
+      {
+        id: defaultBgId,
+        code: "default_tank_background",
+        name: "基础水缸",
+        type: "background",
+        rarity: "common",
+        theme: "default",
+        artKey: "tank-bg-default",
+        unlockHint: "初始鱼缸背景",
+        active: true,
+        sortOrder: 1,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "default_tank_plant",
+      {
+        id: defaultPlantId,
+        code: "default_tank_plant",
+        name: "基础水草",
+        type: "plant",
+        rarity: "common",
+        theme: "default",
+        artKey: "tank-plant-default",
+        unlockHint: "初始鱼缸植物",
+        active: true,
+        sortOrder: 2,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "default_tank_prop_empty",
+      {
+        id: defaultPropId,
+        code: "default_tank_prop_empty",
+        name: "空石头",
+        type: "prop",
+        rarity: "common",
+        theme: "default",
+        artKey: "tank-prop-empty",
+        unlockHint: "初始鱼缸小景",
+        active: true,
+        sortOrder: 3,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "default_tank_ambient_bubbles",
+      {
+        id: defaultAmbientId,
+        code: "default_tank_ambient_bubbles",
+        name: "基础泡泡",
+        type: "ambient",
+        rarity: "common",
+        theme: "default",
+        artKey: "tank-ambient-bubbles",
+        unlockHint: "初始水底气泡",
+        active: true,
+        sortOrder: 4,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "office_window_background",
+      {
+        id: lockedBgId,
+        code: "office_window_background",
+        name: "工位窗景",
+        type: "background",
+        rarity: "rare",
+        theme: "office",
+        artKey: "tank-bg-office-window",
+        unlockHint: "收集 5 种不同的工位命运豆",
+        active: true,
+        sortOrder: 11,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ],
+    [
+      "kelp_forest_plant",
+      {
+        id: lockedPlantId,
+        code: "kelp_forest_plant",
+        name: "海藻丛",
+        type: "plant",
+        rarity: "uncommon",
+        theme: "default",
+        artKey: "tank-plant-kelp-forest",
+        unlockHint: "完成 3 次喂鱼",
+        active: true,
+        sortOrder: 21,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      }
+    ]
+  ]);
+
+  return {
+    userTank,
+    userFish,
+    careEvents,
+    hatchEvents,
+    resourceLedger,
+    auditEvents,
+    ownedDecorations,
+    equippedDecorations,
+    equipEvents,
+    starterDefinition: definitions.get("starter_goldfish")!,
+    definitions,
+    decorDefinitions
+  };
 }
 
 function createPrismaMock(store: TestStore) {
@@ -787,6 +1178,19 @@ function createPrismaMock(store: TestStore) {
     }
     if (by.code) {
       return store.definitions.get(by.code) ?? null;
+    }
+    return null;
+  }
+
+  function resolveDecorDefinition(by: { id?: string; code?: string }): TestDecorationDefinition | null {
+    if (by.id) {
+      for (const def of store.decorDefinitions.values()) {
+        if (def.id === by.id) return def;
+      }
+      return null;
+    }
+    if (by.code) {
+      return store.decorDefinitions.get(by.code) ?? null;
     }
     return null;
   }
@@ -909,6 +1313,11 @@ function createPrismaMock(store: TestStore) {
           ) ?? null
         );
       },
+      findFirst: async ({ where, orderBy }: { where: { userId: string }; orderBy?: { createdAt: string } }) => {
+        const rows = store.hatchEvents.filter((e) => e.userId === where.userId);
+        rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        return rows[0] ?? null;
+      },
       create: async ({ data }: { data: Omit<TestHatchEvent, "id"> }) => {
         const event: TestHatchEvent = {
           ...data,
@@ -916,6 +1325,74 @@ function createPrismaMock(store: TestStore) {
           createdAt: data.createdAt ?? new Date()
         };
         store.hatchEvents.push(event);
+        return event;
+      }
+    },
+    tankDecorationDefinition: {
+      findUnique: async ({ where }: { where: { id?: string; code?: string } }) => resolveDecorDefinition(where),
+      findMany: async ({ where }: { where?: { active?: boolean } }) => {
+        let defs = [...store.decorDefinitions.values()];
+        if (where?.active !== undefined) defs = defs.filter((d) => d.active === where.active);
+        defs.sort((a, b) => {
+          if (a.type !== b.type) return a.type.localeCompare(b.type);
+          return a.sortOrder - b.sortOrder;
+        });
+        return defs;
+      }
+    },
+    userTankDecoration: {
+      findMany: async ({ where }: { where: { userId: string } }) =>
+        [...store.ownedDecorations.values()].filter((d) => d.userId === where.userId),
+      findUnique: async ({ where }: { where: { userId_decorationDefinitionId: { userId: string; decorationDefinitionId: string } } }) => {
+        const key = `${where.userId_decorationDefinitionId.userId}:${where.userId_decorationDefinitionId.decorationDefinitionId}`;
+        return store.ownedDecorations.get(key) ?? null;
+      },
+      upsert: async ({ where, create }: { where: { userId_decorationDefinitionId: { userId: string; decorationDefinitionId: string } }; create: Omit<TestOwnedDecoration, "createdAt" | "updatedAt"> }) => {
+        const key = `${where.userId_decorationDefinitionId.userId}:${where.userId_decorationDefinitionId.decorationDefinitionId}`;
+        const existing = store.ownedDecorations.get(key);
+        if (existing) return existing;
+        const created = { ...create, createdAt: new Date(), updatedAt: new Date() };
+        store.ownedDecorations.set(key, created);
+        return created;
+      }
+    },
+    userTankEquippedDecoration: {
+      findMany: async ({ where }: { where: { userId: string } }) =>
+        [...store.equippedDecorations.values()].filter((d) => d.userId === where.userId),
+      findUnique: async ({ where }: { where: { userId_slot: { userId: string; slot: string } } }) => {
+        const key = `${where.userId_slot.userId}:${where.userId_slot.slot}`;
+        return store.equippedDecorations.get(key) ?? null;
+      },
+      upsert: async ({ where, create, update }: { where: { userId_slot: { userId: string; slot: string } }; create: Omit<TestEquippedDecoration, "equippedAt">; update: Partial<TestEquippedDecoration> }) => {
+        const key = `${where.userId_slot.userId}:${where.userId_slot.slot}`;
+        const existing = store.equippedDecorations.get(key);
+        if (existing) {
+          const updated = { ...existing, ...update };
+          store.equippedDecorations.set(key, updated);
+          return updated;
+        }
+        const created = { ...create, equippedAt: new Date() };
+        store.equippedDecorations.set(key, created);
+        return created;
+      }
+    },
+    tankDecorationEquipEvent: {
+      findUnique: async ({ where }: { where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } } }) => {
+        return (
+          store.equipEvents.find(
+            (e) =>
+              e.userId === where.userId_idempotencyKey.userId &&
+              e.idempotencyKey === where.userId_idempotencyKey.idempotencyKey
+          ) ?? null
+        );
+      },
+      create: async ({ data }: { data: Omit<TestEquipEvent, "id"> }) => {
+        const event: TestEquipEvent = {
+          ...data,
+          id: `equip-${store.equipEvents.length + 1}`,
+          createdAt: data.createdAt ?? new Date()
+        };
+        store.equipEvents.push(event);
         return event;
       }
     },

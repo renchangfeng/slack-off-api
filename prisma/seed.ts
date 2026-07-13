@@ -8,7 +8,9 @@ import {
   FishRarity,
   FishTheme,
   Prisma,
-  PrismaClient
+  PrismaClient,
+  TankDecorationRarity,
+  TankDecorationSlot
 } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -195,6 +197,176 @@ const fishDefinitions = [
     artKey: "fish-moonlight-overtime-angler",
     sourceHint: "hatch",
     sortOrder: 5
+  }
+];
+
+const tankDecorationDefinitions = [
+  // Default decor: every initialized tank should have these available.
+  {
+    code: "default_tank_background",
+    name: "基础水缸",
+    type: TankDecorationSlot.background,
+    rarity: TankDecorationRarity.common,
+    theme: "default",
+    artKey: "tank-bg-default",
+    unlockHint: "初始鱼缸背景",
+    active: true,
+    sortOrder: 1
+  },
+  {
+    code: "default_tank_plant",
+    name: "基础水草",
+    type: TankDecorationSlot.plant,
+    rarity: TankDecorationRarity.common,
+    theme: "default",
+    artKey: "tank-plant-default",
+    unlockHint: "初始鱼缸植物",
+    active: true,
+    sortOrder: 2
+  },
+  {
+    code: "default_tank_prop_empty",
+    name: "空石头",
+    type: TankDecorationSlot.prop,
+    rarity: TankDecorationRarity.common,
+    theme: "default",
+    artKey: "tank-prop-empty",
+    unlockHint: "初始鱼缸小景",
+    active: true,
+    sortOrder: 3
+  },
+  {
+    code: "default_tank_ambient_bubbles",
+    name: "基础泡泡",
+    type: TankDecorationSlot.ambient,
+    rarity: TankDecorationRarity.common,
+    theme: "default",
+    artKey: "tank-ambient-bubbles",
+    unlockHint: "初始水底气泡",
+    active: true,
+    sortOrder: 4
+  },
+  // Locked / earnable decor across multiple themes and rarities.
+  {
+    code: "restroom_blue_tile_background",
+    name: "洗手台蓝砖",
+    type: TankDecorationSlot.background,
+    rarity: TankDecorationRarity.uncommon,
+    theme: "restroom",
+    artKey: "tank-bg-restroom-blue-tile",
+    unlockHint: "在洗手间主题休息中累计完成 3 次有效打卡",
+    active: true,
+    sortOrder: 11
+  },
+  {
+    code: "office_window_background",
+    name: "工位窗景",
+    type: TankDecorationSlot.background,
+    rarity: TankDecorationRarity.rare,
+    theme: "office",
+    artKey: "tank-bg-office-window",
+    unlockHint: "收集 5 种不同的工位命运豆",
+    active: true,
+    sortOrder: 12
+  },
+  {
+    code: "daydream_cloud_background",
+    name: "白日梦云层",
+    type: TankDecorationSlot.background,
+    rarity: TankDecorationRarity.epic,
+    theme: "daydream",
+    artKey: "tank-bg-daydream-cloud",
+    unlockHint: "累计完成 7 天连续打卡",
+    active: true,
+    sortOrder: 13
+  },
+  {
+    code: "kelp_forest_plant",
+    name: "海藻丛",
+    type: TankDecorationSlot.plant,
+    rarity: TankDecorationRarity.uncommon,
+    theme: "default",
+    artKey: "tank-plant-kelp-forest",
+    unlockHint: "完成 3 次喂鱼",
+    active: true,
+    sortOrder: 21
+  },
+  {
+    code: "lotus_leaf_plant",
+    name: "小荷叶",
+    type: TankDecorationSlot.plant,
+    rarity: TankDecorationRarity.rare,
+    theme: "restroom",
+    artKey: "tank-plant-lotus-leaf",
+    unlockHint: "成功孵化 2 条不同主题的鱼",
+    active: true,
+    sortOrder: 22
+  },
+  {
+    code: "coral_prop",
+    name: "小珊瑚",
+    type: TankDecorationSlot.prop,
+    rarity: TankDecorationRarity.uncommon,
+    theme: "default",
+    artKey: "tank-prop-coral",
+    unlockHint: "成功孵化第一条鱼",
+    active: true,
+    sortOrder: 31
+  },
+  {
+    code: "sunken_keyboard_prop",
+    name: "沉底键盘",
+    type: TankDecorationSlot.prop,
+    rarity: TankDecorationRarity.rare,
+    theme: "office",
+    artKey: "tank-prop-sunken-keyboard",
+    unlockHint: "完成 10 次摸鱼活动",
+    active: true,
+    sortOrder: 32
+  },
+  {
+    code: "paper_boat_prop",
+    name: "纸船",
+    type: TankDecorationSlot.prop,
+    rarity: TankDecorationRarity.epic,
+    theme: "daydream",
+    artKey: "tank-prop-paper-boat",
+    unlockHint: "累计收集 10 种不同的命运豆",
+    active: true,
+    sortOrder: 33
+  },
+  {
+    code: "neon_bubbles_ambient",
+    name: "霓虹泡泡",
+    type: TankDecorationSlot.ambient,
+    rarity: TankDecorationRarity.uncommon,
+    theme: "office",
+    artKey: "tank-ambient-neon-bubbles",
+    unlockHint: "在深夜时段完成一次有效打卡",
+    active: true,
+    sortOrder: 41
+  },
+  {
+    code: "starry_water_ambient",
+    name: "星光水面",
+    type: TankDecorationSlot.ambient,
+    rarity: TankDecorationRarity.rare,
+    theme: "daydream",
+    artKey: "tank-ambient-starry-water",
+    unlockHint: "连续 3 天喂养你的鱼",
+    active: true,
+    sortOrder: 42
+  },
+  {
+    code: "coffee_steam_ambient",
+    name: "咖啡蒸汽",
+    type: TankDecorationSlot.ambient,
+    rarity: TankDecorationRarity.epic,
+    theme: "office",
+    artKey: "tank-ambient-coffee-steam",
+    unlockHint: "累计消耗 50 点孵化进度",
+    active: true,
+    sortOrder: 43
   }
 ];
 
@@ -2375,6 +2547,7 @@ async function main() {
     }
 
     validateFishDefinitions();
+    validateTankDecorationDefinitions();
 
     const flavorCounts = activities.reduce<Record<string, number>>((counts, activity) => {
       const flavor = (activity.rewardConfig as { flavor?: string }).flavor;
@@ -2383,6 +2556,14 @@ async function main() {
       }
       return counts;
     }, {});
+
+    const decorationSlotCounts = tankDecorationDefinitions.reduce<Record<string, number>>(
+      (counts, decor) => {
+        counts[decor.type] = (counts[decor.type] ?? 0) + 1;
+        return counts;
+      },
+      {}
+    );
 
     console.log(
       JSON.stringify(
@@ -2400,7 +2581,9 @@ async function main() {
           authoredInteractions: authoredTotal,
           authoredPresentations: activities.length,
           widgetTemplateCounts,
-          flavorCounts
+          flavorCounts,
+          tankDecorations: tankDecorationDefinitions.length,
+          tankDecorationSlots: decorationSlotCounts
         },
         null,
         2
@@ -2410,6 +2593,7 @@ async function main() {
   }
 
   validateFishDefinitions();
+  validateTankDecorationDefinitions();
 
   for (const bean of beans) {
     await prisma.beanDefinition.upsert({
@@ -2424,6 +2608,14 @@ async function main() {
       where: { code: fish.code },
       create: fish,
       update: fish
+    });
+  }
+
+  for (const decor of tankDecorationDefinitions) {
+    await prisma.tankDecorationDefinition.upsert({
+      where: { code: decor.code },
+      create: decor,
+      update: decor
     });
   }
 
@@ -2493,6 +2685,52 @@ function validateFishDefinitions() {
   }
   if (activeNonStarterCount < 4) {
     throw new Error(`Fish seed must contain at least four active non-starter fish, found ${activeNonStarterCount}`);
+  }
+}
+
+function validateTankDecorationDefinitions() {
+  const codes = new Set<string>();
+  const artKeys = new Set<string>();
+  const validSlots = new Set(Object.values(TankDecorationSlot));
+  const validRarities = new Set(Object.values(TankDecorationRarity));
+  const activeBySlot = new Map<string, number>();
+
+  for (const decor of tankDecorationDefinitions) {
+    if (codes.has(decor.code)) {
+      throw new Error(`Duplicate tank decoration code: ${decor.code}`);
+    }
+    codes.add(decor.code);
+
+    if (artKeys.has(decor.artKey)) {
+      throw new Error(`Duplicate tank decoration art key: ${decor.artKey}`);
+    }
+    artKeys.add(decor.artKey);
+
+    if (!validSlots.has(decor.type)) {
+      throw new Error(`Invalid tank decoration slot for ${decor.code}: ${decor.type}`);
+    }
+    if (!validRarities.has(decor.rarity)) {
+      throw new Error(`Invalid tank decoration rarity for ${decor.code}: ${decor.rarity}`);
+    }
+    if (typeof decor.sortOrder !== "number") {
+      throw new Error(`Invalid tank decoration sort order for ${decor.code}`);
+    }
+
+    if (decor.active !== false) {
+      activeBySlot.set(decor.type, (activeBySlot.get(decor.type) ?? 0) + 1);
+    }
+  }
+
+  for (const slot of validSlots) {
+    if ((activeBySlot.get(slot) ?? 0) < 1) {
+      throw new Error(`Tank decoration seed must contain at least one active decoration for slot ${slot}`);
+    }
+  }
+
+  if (tankDecorationDefinitions.length < 10) {
+    throw new Error(
+      `Tank decoration seed must contain at least 10 definitions, found ${tankDecorationDefinitions.length}`
+    );
   }
 }
 

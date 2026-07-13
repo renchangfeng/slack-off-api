@@ -1368,7 +1368,7 @@ components:
                 $ref: "#/components/schemas/AchievementUnlock"
     FishTankSummary:
       type: object
-      required: [initialized, fish, careAvailability, hatchAvailability, collection, moodCopy, nextAction, resourceSummary]
+      required: [initialized, fish, careAvailability, hatchAvailability, collection, mood, moodCopy, nextAction, resourceSummary, decorations]
       properties:
         initialized:
           type: boolean
@@ -1382,13 +1382,19 @@ components:
           $ref: "#/components/schemas/FishTankHatchAvailability"
         collection:
           $ref: "#/components/schemas/FishCollectionSummary"
+        mood:
+          $ref: "#/components/schemas/TankMood"
         moodCopy:
           type: string
+          deprecated: true
+          description: Backward-compatible alias of mood.copy.
         nextAction:
           type: string
-          enum: [initialize, feed, hatch, wait]
+          enum: [initialize, feed, hatch, decor, wait]
         resourceSummary:
           $ref: "#/components/schemas/FishTankResourceSummary"
+        decorations:
+          $ref: "#/components/schemas/DecorationsSummary"
     FishTankFish:
       type: object
       required: [id, definitionId, name, rarity, theme, personality, artKey, acquiredSource, createdAt]
@@ -1544,6 +1550,135 @@ components:
           type: string
         tank:
           $ref: "#/components/schemas/FishTankSummary"
+    TankMood:
+      type: object
+      required: [code, title, copy, ambientArtKey]
+      properties:
+        code:
+          type: string
+          enum: [idle, cozy, excited, sleepy, sparkly]
+        title:
+          type: string
+        copy:
+          type: string
+        ambientArtKey:
+          type: string
+    EquippedDecoration:
+      type: object
+      required: [slot, definitionId, code, name, type, rarity, artKey]
+      properties:
+        slot:
+          type: string
+          enum: [background, plant, prop, ambient]
+        definitionId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [background, plant, prop, ambient]
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+        artKey:
+          type: string
+    DecorationInventoryItem:
+      type: object
+      required: [definitionId, code, name, type, rarity, artKey, unlockHint, owned, equipped, slot]
+      properties:
+        definitionId:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [background, plant, prop, ambient]
+        rarity:
+          type: string
+          enum: [common, uncommon, rare, epic, legendary]
+        artKey:
+          type: [string, "null"]
+        unlockHint:
+          type: string
+        owned:
+          type: boolean
+        equipped:
+          type: boolean
+        slot:
+          type: string
+          enum: [background, plant, prop, ambient]
+    DecorationsSummary:
+      type: object
+      required: [equipped, inventory]
+      properties:
+        equipped:
+          type: array
+          items:
+            $ref: "#/components/schemas/EquippedDecoration"
+        inventory:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecorationInventoryItem"
+    EquipDecorationRequest:
+      type: object
+      additionalProperties: false
+      required: [slot, decorationDefinitionId, idempotencyKey]
+      properties:
+        slot:
+          type: string
+          enum: [background, plant, prop, ambient]
+        decorationDefinitionId:
+          type: string
+          format: uuid
+        idempotencyKey:
+          type: string
+          minLength: 8
+          maxLength: 128
+    EquipDecorationResult:
+      type: object
+      required: [success, replayed, outcomeCode, resultTitle, resultCopy, equipped, tank]
+      properties:
+        success:
+          type: boolean
+        replayed:
+          type: boolean
+        outcomeCode:
+          type: string
+        resultTitle:
+          type: string
+        resultCopy:
+          type: string
+        equipped:
+          $ref: "#/components/schemas/EquippedDecoration"
+        tank:
+          $ref: "#/components/schemas/FishTankSummary"
+    FishTankDecorError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_IDEMPOTENCY_KEY, IDEMPOTENCY_KEY_REUSED, INVALID_DECORATION_SLOT, DECORATION_LOCKED, DECORATION_NOT_FOUND, WRONG_DECORATION_SLOT, TANK_NOT_INITIALIZED, RATE_LIMITED]
+        message:
+          type: string
+        requestId:
+          type: string
+        traceId:
+          type: string
+    FishTankDecorErrorEnvelope:
+      type: object
+      required: [data, error]
+      properties:
+        data:
+          type: "null"
+        error:
+          $ref: "#/components/schemas/FishTankDecorError"
     FishTankResourceType:
       type: string
       enum: [food, bubble, hatch_progress]
@@ -2352,3 +2487,59 @@ paths:
           description: Invalid idempotency key
         "409":
           description: Tank not initialized, insufficient progress, or catalog complete
+  /v1/fish-tank/decorations/equip:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EquipDecorationRequest"
+      responses:
+        "200":
+          description: Decoration equipped or replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/EquipDecorationResult"
+                  error:
+                    type: "null"
+        "400":
+          description: Invalid slot, decoration definition, or idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankDecorErrorEnvelope"
+        "403":
+          description: Decoration locked or not owned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankDecorErrorEnvelope"
+        "404":
+          description: Decoration definition not found or inactive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankDecorErrorEnvelope"
+        "409":
+          description: Tank not initialized, wrong decoration slot, or reused idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankDecorErrorEnvelope"
+        "429":
+          description: Decoration equip rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankDecorErrorEnvelope"

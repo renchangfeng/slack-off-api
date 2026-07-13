@@ -137,43 +137,65 @@ enum FishTankResourceType {
   @@map("fish_tank_resource_type")
 }
 
+enum TankDecorationSlot {
+  background
+  plant
+  prop
+  ambient
+
+  @@map("tank_decoration_slot")
+}
+
+enum TankDecorationRarity {
+  common
+  uncommon
+  rare
+  epic
+  legendary
+
+  @@map("tank_decoration_rarity")
+}
+
 model User {
-  id                     String                   @id @default(uuid()) @db.Uuid
-  authSubject            String                   @unique @map("auth_subject")
-  email                  String?                  @unique
-  displayName            String                   @map("display_name")
-  friendCode             String?                  @unique @map("friend_code")
-  avatarUrl              String?                  @map("avatar_url")
-  createdAt              DateTime                 @default(now()) @map("created_at")
-  updatedAt              DateTime                 @updatedAt @map("updated_at")
-  deletedAt              DateTime?                @map("deleted_at")
-  profile                UserProfile?
-  stats                  UserStats?
-  checkInSessions        CheckInSession[]
-  leaderboardScores      LeaderboardScore[]
-  rewardLedger           RewardLedger[]
-  beanInventory          BeanInventory[]
-  achievements           UserAchievement[]
-  cosmetics              UserCosmetic[]
-  activityAssignments    ActivityAssignment[]
-  activityFeedbackEvents ActivityFeedbackEvent[]
-  progressionPeriods     ProgressionGoalPeriod[]
-  beanShowcase           BeanShowcase[]
-  actorAuditEvents       AuditEvent[]             @relation("AuditActor")
-  targetAuditEvents      AuditEvent[]             @relation("AuditTarget")
-  friendshipsAsA         Friendship[]             @relation("FriendshipUserA")
-  friendshipsAsB         Friendship[]             @relation("FriendshipUserB")
-  ownedSquads            Squad[]                  @relation("SquadOwner")
-  squadMembership        SquadMembership?
-  ownedCompanies         Company[]                @relation("CompanyOwner")
-  companyMembership      CompanyMembership?
-  sentReactions          SocialReaction[]         @relation("ReactionSender")
-  receivedReactions      SocialReaction[]         @relation("ReactionRecipient")
-  userTank               UserTank?
-  userFishes             UserFish[]
-  fishCareEvents         FishCareEvent[]
-  fishHatchEvents        FishHatchEvent[]
-  fishTankResourceLedger FishTankResourceLedger[]
+  id                          String                       @id @default(uuid()) @db.Uuid
+  authSubject                 String                       @unique @map("auth_subject")
+  email                       String?                      @unique
+  displayName                 String                       @map("display_name")
+  friendCode                  String?                      @unique @map("friend_code")
+  avatarUrl                   String?                      @map("avatar_url")
+  createdAt                   DateTime                     @default(now()) @map("created_at")
+  updatedAt                   DateTime                     @updatedAt @map("updated_at")
+  deletedAt                   DateTime?                    @map("deleted_at")
+  profile                     UserProfile?
+  stats                       UserStats?
+  checkInSessions             CheckInSession[]
+  leaderboardScores           LeaderboardScore[]
+  rewardLedger                RewardLedger[]
+  beanInventory               BeanInventory[]
+  achievements                UserAchievement[]
+  cosmetics                   UserCosmetic[]
+  activityAssignments         ActivityAssignment[]
+  activityFeedbackEvents      ActivityFeedbackEvent[]
+  progressionPeriods          ProgressionGoalPeriod[]
+  beanShowcase                BeanShowcase[]
+  actorAuditEvents            AuditEvent[]                 @relation("AuditActor")
+  targetAuditEvents           AuditEvent[]                 @relation("AuditTarget")
+  friendshipsAsA              Friendship[]                 @relation("FriendshipUserA")
+  friendshipsAsB              Friendship[]                 @relation("FriendshipUserB")
+  ownedSquads                 Squad[]                      @relation("SquadOwner")
+  squadMembership             SquadMembership?
+  ownedCompanies              Company[]                    @relation("CompanyOwner")
+  companyMembership           CompanyMembership?
+  sentReactions               SocialReaction[]             @relation("ReactionSender")
+  receivedReactions           SocialReaction[]             @relation("ReactionRecipient")
+  userTank                    UserTank?
+  userFishes                  UserFish[]
+  fishCareEvents              FishCareEvent[]
+  fishHatchEvents             FishHatchEvent[]
+  fishTankResourceLedger      FishTankResourceLedger[]
+  userTankDecorations         UserTankDecoration[]
+  userTankEquippedDecorations UserTankEquippedDecoration[]
+  tankDecorationEquipEvents   TankDecorationEquipEvent[]
 
   @@map("users")
 }
@@ -607,6 +629,73 @@ model FishTankResourceLedger {
   @@index([userId, resourceType])
   @@index([userId, sourceType, sourceId])
   @@map("fish_tank_resource_ledger")
+}
+
+model TankDecorationDefinition {
+  id                  String                       @id @default(uuid()) @db.Uuid
+  code                String                       @unique
+  name                String
+  type                TankDecorationSlot
+  rarity              TankDecorationRarity
+  theme               String?
+  artKey              String                       @map("art_key")
+  unlockHint          String                       @map("unlock_hint")
+  active              Boolean                      @default(true)
+  sortOrder           Int                          @default(0) @map("sort_order")
+  createdAt           DateTime                     @default(now()) @map("created_at")
+  updatedAt           DateTime                     @updatedAt @map("updated_at")
+  ownedDecorations    UserTankDecoration[]
+  equippedDecorations UserTankEquippedDecoration[]
+  equipEvents         TankDecorationEquipEvent[]
+
+  @@map("tank_decoration_definitions")
+}
+
+model UserTankDecoration {
+  userId                 String                   @map("user_id") @db.Uuid
+  decorationDefinitionId String                   @map("decoration_definition_id") @db.Uuid
+  quantity               Int                      @default(1)
+  acquiredSource         String                   @map("acquired_source")
+  createdAt              DateTime                 @default(now()) @map("created_at")
+  updatedAt              DateTime                 @updatedAt @map("updated_at")
+  user                   User                     @relation(fields: [userId], references: [id])
+  definition             TankDecorationDefinition @relation(fields: [decorationDefinitionId], references: [id])
+
+  @@id([userId, decorationDefinitionId])
+  @@index([userId])
+  @@map("user_tank_decorations")
+}
+
+model UserTankEquippedDecoration {
+  userId                 String                   @map("user_id") @db.Uuid
+  slot                   TankDecorationSlot
+  decorationDefinitionId String                   @map("decoration_definition_id") @db.Uuid
+  equippedAt             DateTime                 @default(now()) @map("equipped_at")
+  user                   User                     @relation(fields: [userId], references: [id])
+  definition             TankDecorationDefinition @relation(fields: [decorationDefinitionId], references: [id])
+
+  @@id([userId, slot])
+  @@index([userId])
+  @@map("user_tank_equipped_decorations")
+}
+
+model TankDecorationEquipEvent {
+  id                     String                   @id @default(uuid()) @db.Uuid
+  userId                 String                   @map("user_id") @db.Uuid
+  slot                   TankDecorationSlot
+  decorationDefinitionId String                   @map("decoration_definition_id") @db.Uuid
+  idempotencyKey         String                   @map("idempotency_key")
+  outcomeCode            String                   @map("outcome_code")
+  replay                 Boolean                  @default(false)
+  resultMetadata         Json                     @map("result_metadata")
+  createdAt              DateTime                 @default(now()) @map("created_at")
+  user                   User                     @relation(fields: [userId], references: [id])
+  definition             TankDecorationDefinition @relation(fields: [decorationDefinitionId], references: [id])
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([decorationDefinitionId])
+  @@map("tank_decoration_equip_events")
 }
 
 model AuditEvent {

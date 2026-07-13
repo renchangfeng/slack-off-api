@@ -45,3 +45,40 @@ describe("fish hatch migration", () => {
     expect(sql).not.toContain('"FishHatchEvent"');
   });
 });
+
+describe("fish tank decoration migration", () => {
+  it("uses PostgreSQL identifiers that match Prisma @@map names", () => {
+    const sql = readFileSync(
+      new URL(
+        "../../prisma/migrations/20260710000000_add_fish_tank_decorations/migration.sql",
+        import.meta.url
+      ),
+      "utf8"
+    );
+
+    expect(sql).toContain('CREATE TYPE "tank_decoration_slot"');
+    expect(sql).toContain('CREATE TYPE "tank_decoration_rarity"');
+    expect(sql).toContain('CREATE TABLE "tank_decoration_definitions"');
+    expect(sql).toContain('CREATE TABLE "user_tank_decorations"');
+    expect(sql).toContain('CREATE TABLE "user_tank_equipped_decorations"');
+    expect(sql).toContain('CREATE TABLE "tank_decoration_equip_events"');
+    expect(sql).toContain('"type" "tank_decoration_slot" NOT NULL');
+    expect(sql).toContain('"rarity" "tank_decoration_rarity" NOT NULL');
+    expect(sql).toContain('"tank_decoration_definitions_code_key"');
+    expect(sql).toContain('"tank_decoration_definitions_type_sort_order_idx"');
+    expect(sql).toContain('"user_tank_decorations_user_id_idx"');
+    expect(sql).toContain('"user_tank_equipped_decorations_user_id_idx"');
+    expect(sql).toContain('"tank_decoration_equip_events_user_id_idempotency_key_key"');
+    expect(sql).toContain('"tank_decoration_equip_events_user_id_created_at_idx"');
+    expect(sql).toContain('"tank_decoration_equip_events_decoration_definition_id_idx"');
+    expect(sql).toContain('"user_tank_decorations_user_id_fkey"');
+    expect(sql).toContain('"user_tank_decorations_decoration_definition_id_fkey"');
+    expect(sql).toContain('"user_tank_equipped_decorations_user_id_fkey"');
+    expect(sql).toContain('"user_tank_equipped_decorations_decoration_definition_id_fkey"');
+    expect(sql).toContain('"tank_decoration_equip_events_user_id_fkey"');
+    expect(sql).toContain('"tank_decoration_equip_events_decoration_definition_id_fkey"');
+    expect(sql).not.toContain('"TankDecorationDefinition"');
+    expect(sql).not.toContain('"TankDecorationSlot"');
+    expect(sql).not.toContain('"TankDecorationRarity"');
+  });
+});
