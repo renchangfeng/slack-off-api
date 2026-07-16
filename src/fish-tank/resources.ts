@@ -173,6 +173,90 @@ export async function debitHatchProgress(
   return { previousBalance, newBalance };
 }
 
+export async function getFoodBalance(prisma: PrismaClientLike, userId: string): Promise<number> {
+  const result = await prisma.fishTankResourceLedger.aggregate({
+    where: { userId, resourceType: FishTankResourceType.food },
+    _sum: { quantity: true }
+  });
+  return result._sum.quantity ?? 0;
+}
+
+export async function getBubbleBalance(prisma: PrismaClientLike, userId: string): Promise<number> {
+  const result = await prisma.fishTankResourceLedger.aggregate({
+    where: { userId, resourceType: FishTankResourceType.bubble },
+    _sum: { quantity: true }
+  });
+  return result._sum.quantity ?? 0;
+}
+
+export async function debitFood(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: {
+    cost: number;
+    careEventId: string;
+    idempotencyKey: string;
+  }
+): Promise<{ previousBalance: number; newBalance: number }> {
+  const previousBalance = await getFoodBalance(prisma, userId);
+  if (previousBalance < input.cost) {
+    throw new FishTankResourceError("INSUFFICIENT_FOOD", "Not enough food");
+  }
+
+  const ledgerIdempotencyKey = `care_feed:${input.idempotencyKey}`;
+
+  await prisma.fishTankResourceLedger.upsert({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: ledgerIdempotencyKey } },
+    create: {
+      userId,
+      resourceType: FishTankResourceType.food,
+      quantity: -input.cost,
+      sourceType: "care_feed",
+      sourceId: input.careEventId,
+      idempotencyKey: ledgerIdempotencyKey,
+      metadata: { careEventId: input.careEventId, cost: input.cost }
+    },
+    update: {}
+  });
+
+  const newBalance = previousBalance - input.cost;
+  return { previousBalance, newBalance };
+}
+
+export async function debitBubble(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: {
+    cost: number;
+    careEventId: string;
+    idempotencyKey: string;
+  }
+): Promise<{ previousBalance: number; newBalance: number }> {
+  const previousBalance = await getBubbleBalance(prisma, userId);
+  if (previousBalance < input.cost) {
+    throw new FishTankResourceError("INSUFFICIENT_BUBBLE", "Not enough bubble");
+  }
+
+  const ledgerIdempotencyKey = `care_bubble:${input.idempotencyKey}`;
+
+  await prisma.fishTankResourceLedger.upsert({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: ledgerIdempotencyKey } },
+    create: {
+      userId,
+      resourceType: FishTankResourceType.bubble,
+      quantity: -input.cost,
+      sourceType: "care_bubble",
+      sourceId: input.careEventId,
+      idempotencyKey: ledgerIdempotencyKey,
+      metadata: { careEventId: input.careEventId, cost: input.cost }
+    },
+    update: {}
+  });
+
+  const newBalance = previousBalance - input.cost;
+  return { previousBalance, newBalance };
+}
+
 export class FishTankResourceError extends Error {
   constructor(
     public readonly code: string,

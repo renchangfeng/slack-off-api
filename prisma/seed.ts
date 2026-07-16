@@ -156,6 +156,7 @@ const fishDefinitions = [
     personality: "假装工作的",
     artKey: "fish-starter-goldfish",
     sourceHint: "starter",
+    active: true,
     sortOrder: 1
   },
   {
@@ -166,6 +167,7 @@ const fishDefinitions = [
     personality: "宽容卡纸的",
     artKey: "fish-printer-peace-beta",
     sourceHint: "hatch",
+    active: true,
     sortOrder: 2
   },
   {
@@ -176,6 +178,7 @@ const fishDefinitions = [
     personality: "在安静隔间顿悟的",
     artKey: "fish-stall-sage-koi",
     sourceHint: "hatch",
+    active: true,
     sortOrder: 3
   },
   {
@@ -186,6 +189,7 @@ const fishDefinitions = [
     personality: "会议链接永远找不到的",
     artKey: "fish-cloud-meeting-guppy",
     sourceHint: "hatch",
+    active: true,
     sortOrder: 4
   },
   {
@@ -196,6 +200,7 @@ const fishDefinitions = [
     personality: "到点自动熄灯的",
     artKey: "fish-moonlight-overtime-angler",
     sourceHint: "hatch",
+    active: true,
     sortOrder: 5
   }
 ];

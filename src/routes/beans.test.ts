@@ -30,7 +30,14 @@ const runtimeConfig: RuntimeConfig = {
     drawProgressPerSession: 1
   },
   beans: { drawProgressPerChance: 3 },
-  fishTank: { starterFishCode: "starter_goldfish", feedCooldownSeconds: 4 * 60 * 60, hatchProgressCost: 3 }
+  fishTank: {
+    starterFishCode: "starter_goldfish",
+    feedCooldownSeconds: 4 * 60 * 60,
+    bubbleCooldownSeconds: 60 * 60,
+    feedCost: 1,
+    bubbleCost: 1,
+    hatchProgressCost: 3
+  }
 };
 
 describe("bean routes", () => {

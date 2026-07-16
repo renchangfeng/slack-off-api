@@ -196,6 +196,7 @@ model User {
   userTankDecorations         UserTankDecoration[]
   userTankEquippedDecorations UserTankEquippedDecoration[]
   tankDecorationEquipEvents   TankDecorationEquipEvent[]
+  fishTankDisplayOrderEvents  FishTankDisplayOrderEvent[]
 
   @@map("users")
 }
@@ -696,6 +697,20 @@ model TankDecorationEquipEvent {
   @@index([userId, createdAt])
   @@index([decorationDefinitionId])
   @@map("tank_decoration_equip_events")
+}
+
+model FishTankDisplayOrderEvent {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  idempotencyKey   String   @map("idempotency_key")
+  displayedFishIds String[] @map("displayed_fish_ids") @db.Uuid
+  resultMetadata   Json     @map("result_metadata")
+  createdAt        DateTime @default(now()) @map("created_at")
+  user             User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@map("fish_tank_display_order_events")
 }
 
 model AuditEvent {

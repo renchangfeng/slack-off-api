@@ -4,6 +4,8 @@ import {
   FishTankResourceType,
   FishTankResourceError,
   debitHatchProgress,
+  debitFood,
+  debitBubble,
   getHatchProgressBalance,
   grantResourcesFromBeanDraw,
   getResourceSummary
@@ -239,6 +241,118 @@ describe("fish tank resources", () => {
 
       const user1Balance = await getHatchProgressBalance(prisma, "user-1");
       expect(user1Balance).toBe(5);
+    });
+  });
+
+  describe("food debit", () => {
+    it("debits food and returns new balance", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.food, quantity: 5 }
+      ]);
+
+      const result = await debitFood(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "feed-key-1"
+      });
+
+      expect(result.previousBalance).toBe(5);
+      expect(result.newBalance).toBe(4);
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalFood).toBe(4);
+    });
+
+    it("rejects debit when food is insufficient", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.food, quantity: 0 }
+      ]);
+
+      await expect(
+        debitFood(prisma, "user-1", {
+          cost: 1,
+          careEventId: "care-1",
+          idempotencyKey: "feed-key-1"
+        })
+      ).rejects.toBeInstanceOf(FishTankResourceError);
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalFood).toBe(0);
+    });
+
+    it("does not double-debit on replay", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.food, quantity: 5 }
+      ]);
+
+      await debitFood(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "feed-key-1"
+      });
+      await debitFood(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "feed-key-1"
+      });
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalFood).toBe(4);
+    });
+  });
+
+  describe("bubble debit", () => {
+    it("debits bubble and returns new balance", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.bubble, quantity: 5 }
+      ]);
+
+      const result = await debitBubble(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "bubble-key-1"
+      });
+
+      expect(result.previousBalance).toBe(5);
+      expect(result.newBalance).toBe(4);
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalBubbles).toBe(4);
+    });
+
+    it("rejects debit when bubble is insufficient", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.bubble, quantity: 0 }
+      ]);
+
+      await expect(
+        debitBubble(prisma, "user-1", {
+          cost: 1,
+          careEventId: "care-1",
+          idempotencyKey: "bubble-key-1"
+        })
+      ).rejects.toBeInstanceOf(FishTankResourceError);
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalBubbles).toBe(0);
+    });
+
+    it("does not double-debit on replay", async () => {
+      const prisma = createMockPrisma([
+        { resourceType: FishTankResourceType.bubble, quantity: 5 }
+      ]);
+
+      await debitBubble(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "bubble-key-1"
+      });
+      await debitBubble(prisma, "user-1", {
+        cost: 1,
+        careEventId: "care-1",
+        idempotencyKey: "bubble-key-1"
+      });
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalBubbles).toBe(4);
     });
   });
 });

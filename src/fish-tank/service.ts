@@ -3,6 +3,7 @@ import type {
   FishCareEvent,
   FishDefinition,
   FishHatchEvent,
+  FishTankDisplayOrderEvent,
   Prisma,
   TankDecorationDefinition,
   TankDecorationSlot,
@@ -10,8 +11,12 @@ import type {
 } from "@prisma/client";
 import type { TraceContext } from "../observability/ids.js";
 import {
+  debitBubble,
+  debitFood,
   debitHatchProgress,
   FishTankResourceError,
+  getBubbleBalance,
+  getFoodBalance,
   getHatchProgressBalance,
   getResourceSummary,
   type FishTankResourceSummary
@@ -52,21 +57,30 @@ export type DecorationsSummary = {
   inventory: DecorationInventoryItem[];
 };
 
+export type FishTankFish = {
+  id: string;
+  definitionId: string;
+  name: string;
+  rarity: string;
+  theme: string;
+  personality: string;
+  artKey: string;
+  acquiredSource: string;
+  createdAt: string;
+};
+
 export type FishTankSummary = {
   initialized: boolean;
-  fish: Array<{
-    id: string;
-    definitionId: string;
-    name: string;
-    rarity: string;
-    theme: string;
-    personality: string;
-    artKey: string;
-    acquiredSource: string;
-    createdAt: string;
-  }>;
+  fish: FishTankFish[];
+  displayedFish: FishTankFish[];
+  eligibleFish: FishTankFish[];
   careAvailability: {
     feed: {
+      available: boolean;
+      nextAvailableAt: string | null;
+      cooldownRemainingSeconds: number;
+    };
+    bubble: {
       available: boolean;
       nextAvailableAt: string | null;
       cooldownRemainingSeconds: number;
@@ -78,6 +92,14 @@ export type FishTankSummary = {
   moodCopy: string;
   nextAction: string;
   resourceSummary: FishTankResourceSummary;
+  costs: {
+    feed: number;
+    bubble: number;
+  };
+  guidance: {
+    foodSource: "draw" | "collection";
+    bubbleSource: "draw" | "collection";
+  };
   decorations: DecorationsSummary;
 };
 
@@ -112,7 +134,26 @@ export type CareInteractionInput = {
 
 export type CareInteractionResult = {
   success: boolean;
+  replayed: boolean;
+  outcomeCode: string;
   resultCopy: string;
+  resourceType: string;
+  cost: number;
+  resourceBalance: number;
+  tank: FishTankSummary;
+};
+
+export type ReorderDisplayedFishInput = {
+  displayedFishIds: string[];
+  idempotencyKey: string;
+};
+
+export type ReorderDisplayedFishResult = {
+  success: boolean;
+  replayed: boolean;
+  outcomeCode: string;
+  resultCopy: string;
+  displayedFish: FishTankFish[];
   tank: FishTankSummary;
 };
 
@@ -148,6 +189,14 @@ export type EquipDecorationResult = {
   tank: FishTankSummary;
 };
 
+export type FishTankRuntimeConfig = {
+  feedCooldownSeconds: number;
+  bubbleCooldownSeconds: number;
+  feedCost: number;
+  bubbleCost: number;
+  hatchProgressCost: number;
+};
+
 type PrismaQueryClientLike = Pick<
   Prisma.TransactionClient,
   | "userTank"
@@ -160,6 +209,7 @@ type PrismaQueryClientLike = Pick<
   | "userTankDecoration"
   | "userTankEquippedDecoration"
   | "tankDecorationEquipEvent"
+  | "fishTankDisplayOrderEvent"
   | "$queryRaw"
 >;
 
@@ -167,16 +217,24 @@ export type PrismaClientLike = PrismaQueryClientLike & {
   $transaction: <T>(fn: (tx: PrismaQueryClientLike) => Promise<T>) => Promise<T>;
 };
 
-const SUPPORTED_INTERACTION_TYPES = new Set(["feed"]);
+const SUPPORTED_INTERACTION_TYPES = new Set(["feed", "bubble"]);
+const DISPLAY_CAPACITY = 3;
 
 export async function getTankSummary(
   prisma: PrismaQueryClientLike,
   userId: string,
   now: Date,
-  feedCooldownSeconds: number,
-  hatchProgressCost: number
+  config: FishTankRuntimeConfig
 ): Promise<FishTankSummary> {
-  const [tank, fishRows, latestFeedEvent, latestHatchEvent] = await Promise.all([
+  const [
+    tank,
+    fishRows,
+    latestFeedEvent,
+    latestBubbleEvent,
+    latestHatchEvent,
+    latestEquipEvent,
+    latestDisplayOrderEvent
+  ] = await Promise.all([
     prisma.userTank.findUnique({ where: { userId } }),
     prisma.userFish.findMany({
       where: { userId },
@@ -187,19 +245,49 @@ export async function getTankSummary(
       where: { userId, interactionType: "feed" },
       orderBy: { createdAt: "desc" }
     }),
+    prisma.fishCareEvent.findFirst({
+      where: { userId, interactionType: "bubble" },
+      orderBy: { createdAt: "desc" }
+    }),
     prisma.fishHatchEvent.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "desc" }
+    }),
+    prisma.tankDecorationEquipEvent.findFirst({
+      where: { userId },
+      orderBy: { createdAt: "desc" }
+    }),
+    prisma.fishTankDisplayOrderEvent.findFirst({
       where: { userId },
       orderBy: { createdAt: "desc" }
     })
   ]);
 
   const initialized = Boolean(tank);
-  const careAvailability = buildCareAvailability(latestFeedEvent, now, feedCooldownSeconds);
+  const allFish = fishRows.map(serializeFish);
+  const activeFishById = new Map(
+    fishRows.filter((row) => row.definition.active).map((row) => [row.id, row])
+  );
+  const displayedFish = latestDisplayOrderEvent
+    ? latestDisplayOrderEvent.displayedFishIds
+        .map((id) => activeFishById.get(id))
+        .filter((row): row is UserFish & { definition: FishDefinition } => Boolean(row))
+        .map(serializeFish)
+        .slice(0, DISPLAY_CAPACITY)
+    : fishRows
+        .filter((row) => row.definition.active)
+        .map(serializeFish)
+        .slice(0, DISPLAY_CAPACITY);
+  const eligibleFish = allFish;
+  const careAvailability = {
+    feed: buildCareAvailability(latestFeedEvent, now, config.feedCooldownSeconds),
+    bubble: buildCareAvailability(latestBubbleEvent, now, config.bubbleCooldownSeconds)
+  };
   const resourceSummary = await getResourceSummary(prisma, userId);
   const collection = await buildCollection(prisma, userId, fishRows);
   const hatchAvailability = buildHatchAvailability({
     initialized,
-    hatchProgressCost,
+    hatchProgressCost: config.hatchProgressCost,
     currentProgress: resourceSummary.totalHatchProgress,
     collection
   });
@@ -208,22 +296,33 @@ export async function getTankSummary(
     initialized,
     fishCount: fishRows.length,
     latestFeedEvent,
+    latestBubbleEvent,
     latestHatchEvent,
-    now,
-    careAvailability,
-    hatchAvailability
+    latestEquipEvent,
+    now
   });
 
   return {
     initialized,
-    fish: fishRows.map(serializeFish),
+    fish: allFish,
+    displayedFish,
+    eligibleFish,
     careAvailability,
     hatchAvailability,
     collection,
     mood,
     moodCopy: mood.copy,
-    nextAction: deriveNextAction({ initialized, careAvailability, hatchAvailability, decorations }),
+    nextAction: deriveNextAction({
+      initialized,
+      careAvailability,
+      hatchAvailability,
+      decorations,
+      resourceSummary,
+      costs: { feed: config.feedCost, bubble: config.bubbleCost }
+    }),
     resourceSummary,
+    costs: { feed: config.feedCost, bubble: config.bubbleCost },
+    guidance: { foodSource: "draw", bubbleSource: "draw" },
     decorations
   };
 }
@@ -232,8 +331,7 @@ export async function initializeTank(
   prisma: PrismaQueryClientLike,
   userId: string,
   starterFishCode: string,
-  feedCooldownSeconds: number,
-  hatchProgressCost: number,
+  config: FishTankRuntimeConfig,
   now: Date,
   trace: TraceContext
 ): Promise<{ summary: FishTankSummary; created: boolean }> {
@@ -269,17 +367,16 @@ export async function initializeTank(
   });
 
   return {
-    summary: await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost),
+    summary: await getTankSummary(prisma, userId, now, config),
     created: !existingTank
   };
 }
 
 export async function performCareInteraction(
-  prisma: PrismaQueryClientLike,
+  prisma: PrismaClientLike,
   userId: string,
   input: CareInteractionInput,
-  feedCooldownSeconds: number,
-  hatchProgressCost: number,
+  config: FishTankRuntimeConfig,
   now: Date,
   trace: TraceContext
 ): Promise<CareInteractionResult> {
@@ -296,13 +393,8 @@ export async function performCareInteraction(
   });
 
   if (existingEvent) {
-    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
-    const metadata = existingEvent.resultMetadata as Record<string, unknown>;
-    return {
-      success: true,
-      resultCopy: String(metadata.resultCopy ?? ""),
-      tank: summary
-    };
+    const summary = await getTankSummary(prisma, userId, now, config);
+    return buildCareReplayResult(existingEvent, summary);
   }
 
   const tank = await prisma.userTank.findUnique({ where: { userId } });
@@ -310,33 +402,114 @@ export async function performCareInteraction(
     throw new FishTankError("TANK_NOT_INITIALIZED", "Initialize your fish tank before caring for fish");
   }
 
-  const latestEvent = await prisma.fishCareEvent.findFirst({
-    where: { userId, interactionType: input.interactionType },
-    orderBy: { createdAt: "desc" }
-  });
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT * FROM user_tanks WHERE user_id = ${userId}::uuid FOR UPDATE`;
 
-  const cooldownRemaining = calculateCooldownRemaining(latestEvent, now, feedCooldownSeconds);
-  if (cooldownRemaining > 0) {
-    const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
+    const existingEventAfterLock = await tx.fishCareEvent.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey: input.idempotencyKey } }
+    });
+
+    if (existingEventAfterLock) {
+      const summary = await getTankSummary(tx, userId, now, config);
+      return buildCareReplayResult(existingEventAfterLock, summary);
+    }
+
+    const latestEvent = await tx.fishCareEvent.findFirst({
+      where: { userId, interactionType: input.interactionType },
+      orderBy: { createdAt: "desc" }
+    });
+
+    const cooldownSeconds =
+      input.interactionType === "bubble" ? config.bubbleCooldownSeconds : config.feedCooldownSeconds;
+    const cooldownRemaining = calculateCooldownRemaining(latestEvent, now, cooldownSeconds);
+    if (cooldownRemaining > 0) {
+      const summary = await getTankSummary(tx, userId, now, config);
+      return {
+        success: false,
+        replayed: false,
+        outcomeCode: "COOLDOWN",
+        resultCopy: "它还在回味上一次互动，稍等片刻再来。",
+        resourceType: input.interactionType,
+        cost: 0,
+        resourceBalance:
+          input.interactionType === "bubble"
+            ? summary.resourceSummary.totalBubbles
+            : summary.resourceSummary.totalFood,
+        tank: summary
+      };
+    }
+
+    const cost = input.interactionType === "bubble" ? config.bubbleCost : config.feedCost;
+    const currentBalance =
+      input.interactionType === "bubble"
+        ? await getBubbleBalance(tx, userId)
+        : await getFoodBalance(tx, userId);
+
+    if (currentBalance < cost) {
+      const summary = await getTankSummary(tx, userId, now, config);
+      return {
+        success: false,
+        replayed: false,
+        outcomeCode:
+          input.interactionType === "bubble" ? "INSUFFICIENT_BUBBLE" : "INSUFFICIENT_FOOD",
+        resultCopy:
+          input.interactionType === "bubble"
+            ? "气泡不够了，抽豆或去收藏看看有没有补充。"
+            : "鱼食不够了，抽豆或去收藏看看有没有补充。",
+        resourceType: input.interactionType,
+        cost,
+        resourceBalance: currentBalance,
+        tank: summary
+      };
+    }
+
+    const resultCopy = deriveCareResultCopy(input.interactionType);
+    const careEvent = await tx.fishCareEvent.create({
+      data: {
+        userId,
+        interactionType: input.interactionType,
+        idempotencyKey: input.idempotencyKey,
+        resultMetadata: {
+          resultCopy,
+          interactionType: input.interactionType,
+          requestId: trace.requestId,
+          cost,
+          outcomeCode: "COMPLETED"
+        }
+      }
+    });
+
+    const debitResult =
+      input.interactionType === "bubble"
+        ? await debitBubble(tx, userId, { cost, careEventId: careEvent.id, idempotencyKey: input.idempotencyKey })
+        : await debitFood(tx, userId, { cost, careEventId: careEvent.id, idempotencyKey: input.idempotencyKey });
+
+    await tx.fishCareEvent.update({
+      where: { id: careEvent.id },
+      data: {
+        resultMetadata: {
+          resultCopy,
+          interactionType: input.interactionType,
+          requestId: trace.requestId,
+          cost,
+          outcomeCode: "COMPLETED",
+          resourceBalance: debitResult.newBalance
+        }
+      }
+    });
+
+    const summary = await getTankSummary(tx, userId, now, config);
     return {
-      success: false,
-      resultCopy: "它刚刚吃饱，正在假装工作。",
+      success: true,
+      replayed: false,
+      outcomeCode: "COMPLETED",
+      resultCopy,
+      resourceType: input.interactionType,
+      cost,
+      resourceBalance: debitResult.newBalance,
       tank: summary
     };
-  }
-
-  const resultCopy = deriveCareResultCopy(input.interactionType);
-  await prisma.fishCareEvent.create({
-    data: {
-      userId,
-      interactionType: input.interactionType,
-      idempotencyKey: input.idempotencyKey,
-      resultMetadata: { resultCopy, interactionType: input.interactionType, requestId: trace.requestId }
-    }
   });
-
-  const summary = await getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost);
-  return { success: true, resultCopy, tank: summary };
 }
 
 export class FishTankError extends Error {
@@ -349,7 +522,7 @@ export class FishTankError extends Error {
   }
 }
 
-function serializeFish(row: UserFish & { definition: { id: string; code: string; name: string; rarity: string; theme: string; personality: string; artKey: string } }): FishTankSummary["fish"][number] {
+function serializeFish(row: UserFish & { definition: FishDefinition }): FishTankFish {
   return {
     id: row.id,
     definitionId: row.definition.id,
@@ -366,20 +539,18 @@ function serializeFish(row: UserFish & { definition: { id: string; code: string;
 function buildCareAvailability(
   latestEvent: FishCareEvent | null,
   now: Date,
-  feedCooldownSeconds: number
-): FishTankSummary["careAvailability"] {
-  const remaining = calculateCooldownRemaining(latestEvent, now, feedCooldownSeconds);
+  cooldownSeconds: number
+): FishTankSummary["careAvailability"]["feed"] {
+  const remaining = calculateCooldownRemaining(latestEvent, now, cooldownSeconds);
   const available = remaining <= 0;
   const nextAvailableAt = available
     ? null
-    : new Date((latestEvent?.createdAt.getTime() ?? now.getTime()) + feedCooldownSeconds * 1000).toISOString();
+    : new Date((latestEvent?.createdAt.getTime() ?? now.getTime()) + cooldownSeconds * 1000).toISOString();
 
   return {
-    feed: {
-      available,
-      nextAvailableAt,
-      cooldownRemainingSeconds: Math.max(0, remaining)
-    }
+    available,
+    nextAvailableAt,
+    cooldownRemainingSeconds: Math.max(0, remaining)
   };
 }
 
@@ -397,10 +568,10 @@ function deriveMood(input: {
   initialized: boolean;
   fishCount: number;
   latestFeedEvent: FishCareEvent | null;
+  latestBubbleEvent: FishCareEvent | null;
   latestHatchEvent: FishHatchEvent | null;
+  latestEquipEvent: { createdAt: Date } | null;
   now: Date;
-  careAvailability: FishTankSummary["careAvailability"];
-  hatchAvailability: HatchAvailability;
 }): TankMood {
   if (!input.initialized) {
     return {
@@ -420,13 +591,18 @@ function deriveMood(input: {
     };
   }
 
-  if (input.hatchAvailability.available) {
-    return {
-      code: "excited",
-      title: "孵化就绪",
-      copy: "进度已经攒够，新邻居随时可以登场。",
-      ambientArtKey: "tank-mood-excited"
-    };
+  if (input.latestEquipEvent) {
+    const minutesSinceEquip = Math.floor(
+      (input.now.getTime() - input.latestEquipEvent.createdAt.getTime()) / 60000
+    );
+    if (minutesSinceEquip < 10) {
+      return {
+        code: "cozy",
+        title: "装扮一新",
+        copy: "鱼缸刚换了新布置，小鱼多转了几圈。",
+        ambientArtKey: "tank-mood-cozy"
+      };
+    }
   }
 
   if (input.latestHatchEvent) {
@@ -441,6 +617,19 @@ function deriveMood(input: {
         ambientArtKey: "tank-mood-sparkly"
       };
     }
+  }
+
+  const minutesSinceBubble = input.latestBubbleEvent
+    ? Math.floor((input.now.getTime() - input.latestBubbleEvent.createdAt.getTime()) / 60000)
+    : null;
+
+  if (minutesSinceBubble !== null && minutesSinceBubble < 5) {
+    return {
+      code: "sparkly",
+      title: "气泡正好",
+      copy: "气泡轻轻擦过鱼缸，小鱼看起来比平时更轻快。",
+      ambientArtKey: "tank-mood-sparkly"
+    };
   }
 
   const minutesSinceFeed = input.latestFeedEvent
@@ -478,12 +667,20 @@ function deriveNextAction(input: {
   careAvailability: FishTankSummary["careAvailability"];
   hatchAvailability: HatchAvailability;
   decorations: DecorationsSummary;
+  resourceSummary: FishTankResourceSummary;
+  costs: { feed: number; bubble: number };
 }): string {
   if (!input.initialized) {
     return "initialize";
   }
-  if (input.careAvailability.feed.available) {
+  if (input.careAvailability.feed.available && input.resourceSummary.totalFood >= input.costs.feed) {
     return "feed";
+  }
+  if (
+    input.careAvailability.bubble.available &&
+    input.resourceSummary.totalBubbles >= input.costs.bubble
+  ) {
+    return "bubble";
   }
   if (input.hatchAvailability.available) {
     return "hatch";
@@ -494,14 +691,44 @@ function deriveNextAction(input: {
   if (hasActionableDecor) {
     return "decor";
   }
-  return "wait";
+  return "companionship";
 }
 
 function deriveCareResultCopy(interactionType: string): string {
   if (interactionType === "feed") {
     return "投喂成功，小鱼看起来很满意。";
   }
+  if (interactionType === "bubble") {
+    return "气泡轻轻升起，鱼缸变得更温柔了一点。";
+  }
   return "互动完成。";
+}
+
+function buildCareReplayResult(
+  event: FishCareEvent,
+  summary: FishTankSummary
+): CareInteractionResult {
+  const metadata = event.resultMetadata as Record<string, unknown>;
+  const interactionType = String(metadata.interactionType ?? event.interactionType);
+  const outcomeCode = String(metadata.outcomeCode ?? "COMPLETED");
+  const cost = typeof metadata.cost === "number" ? metadata.cost : 0;
+  const originalResourceBalance =
+    typeof metadata.resourceBalance === "number" ? metadata.resourceBalance : null;
+
+  return {
+    success: outcomeCode === "COMPLETED",
+    replayed: true,
+    outcomeCode,
+    resultCopy: String(metadata.resultCopy ?? deriveCareResultCopy(interactionType)),
+    resourceType: interactionType,
+    cost,
+    resourceBalance:
+      originalResourceBalance ??
+      (interactionType === "bubble"
+        ? summary.resourceSummary.totalBubbles
+        : summary.resourceSummary.totalFood),
+    tank: summary
+  };
 }
 
 async function buildCollection(
@@ -736,8 +963,7 @@ export async function performEquipDecoration(
   prisma: PrismaClientLike,
   userId: string,
   input: EquipDecorationInput,
-  feedCooldownSeconds: number,
-  hatchProgressCost: number,
+  config: FishTankRuntimeConfig,
   now: Date,
   trace: TraceContext
 ): Promise<EquipDecorationResult> {
@@ -757,7 +983,7 @@ export async function performEquipDecoration(
 
   if (existingEvent) {
     assertEquipEventMatchesInput(existingEvent, input);
-    return buildEquipReplayResult(existingEvent);
+    return buildEquipReplayResult(prisma, userId, existingEvent, now, config);
   }
 
   const tank = await prisma.userTank.findUnique({ where: { userId } });
@@ -792,7 +1018,7 @@ export async function performEquipDecoration(
 
     if (existingEventAfterLock) {
       assertEquipEventMatchesInput(existingEventAfterLock, input);
-      return buildEquipReplayResult(existingEventAfterLock);
+      return buildEquipReplayResult(tx, userId, existingEventAfterLock, now, config);
     }
 
     const ownership = await tx.userTankDecoration.findUnique({
@@ -826,7 +1052,7 @@ export async function performEquipDecoration(
       }
     });
 
-    const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+    const summary = await getTankSummary(tx, userId, now, config);
     const resultTitle = "装扮已更换";
     const resultCopy = `${definition.name} 已经放进鱼缸的 ${slotLabel(slot)} 位置。`;
     const equipped = serializeEquippedDecoration(definition, slot);
@@ -879,16 +1105,22 @@ function slotLabel(slot: string): string {
   }
 }
 
-function buildEquipReplayResult(event: {
-  outcomeCode: string;
-  resultMetadata: Prisma.JsonValue;
-}): EquipDecorationResult {
+async function buildEquipReplayResult(
+  prisma: PrismaQueryClientLike,
+  userId: string,
+  event: {
+    outcomeCode: string;
+    resultMetadata: Prisma.JsonValue;
+  },
+  now: Date,
+  config: FishTankRuntimeConfig
+): Promise<EquipDecorationResult> {
   const metadata = event.resultMetadata as Record<string, unknown>;
   const equipped = metadata.equipped as EquippedDecoration | undefined;
-  const tank = metadata.tank as FishTankSummary | undefined;
-  if (!equipped || !tank || typeof metadata.resultTitle !== "string" || typeof metadata.resultCopy !== "string") {
+  if (!equipped || typeof metadata.resultTitle !== "string" || typeof metadata.resultCopy !== "string") {
     throw new FishTankError("DECORATION_REPLAY_MISSING", "Could not reconstruct replay result");
   }
+  const summary = await getTankSummary(prisma, userId, now, config);
 
   return {
     success: event.outcomeCode === "EQUIPPED",
@@ -897,7 +1129,7 @@ function buildEquipReplayResult(event: {
     resultTitle: metadata.resultTitle,
     resultCopy: metadata.resultCopy,
     equipped,
-    tank
+    tank: summary
   };
 }
 
@@ -917,8 +1149,7 @@ export async function performHatch(
   prisma: PrismaClientLike,
   userId: string,
   input: HatchInput,
-  hatchProgressCost: number,
-  feedCooldownSeconds: number,
+  config: FishTankRuntimeConfig,
   now: Date,
   trace: TraceContext
 ): Promise<HatchResult> {
@@ -936,7 +1167,7 @@ export async function performHatch(
   });
 
   if (existingEvent) {
-    return buildHatchReplayResult(prisma, userId, existingEvent, now, feedCooldownSeconds, hatchProgressCost);
+    return buildHatchReplayResult(prisma, userId, existingEvent, now, config);
   }
 
   return prisma.$transaction(async (tx) => {
@@ -947,19 +1178,12 @@ export async function performHatch(
     });
 
     if (existingEventAfterLock) {
-      return buildHatchReplayResult(
-        tx,
-        userId,
-        existingEventAfterLock,
-        now,
-        feedCooldownSeconds,
-        hatchProgressCost
-      );
+      return buildHatchReplayResult(tx, userId, existingEventAfterLock, now, config);
     }
 
     const currentProgress = await getHatchProgressBalance(tx, userId);
-    if (currentProgress < hatchProgressCost) {
-      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+    if (currentProgress < config.hatchProgressCost) {
+      const summary = await getTankSummary(tx, userId, now, config);
       return {
         success: false,
         replayed: false,
@@ -967,7 +1191,7 @@ export async function performHatch(
         cost: 0,
         outcomeCode: "INSUFFICIENT_HATCH_PROGRESS",
         resultTitle: "孵化进度不足",
-        resultCopy: `还需要 ${hatchProgressCost - currentProgress} 点孵化进度才能召唤新邻居。`,
+        resultCopy: `还需要 ${config.hatchProgressCost - currentProgress} 点孵化进度才能召唤新邻居。`,
         nextHint: "去抽豆或完成活动，继续攒孵化进度。",
         tank: summary
       };
@@ -990,7 +1214,7 @@ export async function performHatch(
     const undiscovered = eligibleDefinitions.filter((def) => !ownedDefinitionIds.has(def.id));
 
     if (undiscovered.length === 0) {
-      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+      const summary = await getTankSummary(tx, userId, now, config);
       return {
         success: false,
         replayed: false,
@@ -1011,7 +1235,7 @@ export async function performHatch(
     });
 
     if (existingOwnership) {
-      const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+      const summary = await getTankSummary(tx, userId, now, config);
       return {
         success: true,
         replayed: false,
@@ -1033,7 +1257,7 @@ export async function performHatch(
         userId,
         fishDefinitionId: selectedDefinition.id,
         idempotencyKey: input.idempotencyKey,
-        hatchCost: hatchProgressCost,
+        hatchCost: config.hatchProgressCost,
         outcomeCode: "DISCOVERED",
         duplicate: false,
         resultMetadata: {
@@ -1045,7 +1269,7 @@ export async function performHatch(
     });
 
     await debitHatchProgress(tx, userId, {
-      cost: hatchProgressCost,
+      cost: config.hatchProgressCost,
       hatchEventId: hatchEvent.id,
       idempotencyKey: input.idempotencyKey
     });
@@ -1060,12 +1284,12 @@ export async function performHatch(
       include: { definition: true }
     });
 
-    const summary = await getTankSummary(tx, userId, now, feedCooldownSeconds, hatchProgressCost);
+    const summary = await getTankSummary(tx, userId, now, config);
     return {
       success: true,
       replayed: false,
       discoveredFish: serializeFish(userFish),
-      cost: hatchProgressCost,
+      cost: config.hatchProgressCost,
       outcomeCode: "DISCOVERED",
       resultTitle: "新鱼登场",
       resultCopy: `${selectedDefinition.name} 从进度里游了出来，鱼缸又热闹了一点。`,
@@ -1092,11 +1316,10 @@ async function buildHatchReplayResult(
   userId: string,
   event: FishHatchEvent,
   now: Date,
-  feedCooldownSeconds: number,
-  hatchProgressCost: number
+  config: FishTankRuntimeConfig
 ): Promise<HatchResult> {
   const [summary, ownership] = await Promise.all([
-    getTankSummary(prisma, userId, now, feedCooldownSeconds, hatchProgressCost),
+    getTankSummary(prisma, userId, now, config),
     prisma.userFish.findUnique({
       where: {
         userId_fishDefinitionId: {
@@ -1117,6 +1340,167 @@ async function buildHatchReplayResult(
     resultTitle: "孵化结果已保存",
     resultCopy: "这条鱼已经在你缸里了，不用再花进度。",
     nextHint: "看看鱼缸或者继续攒进度。",
+    tank: summary
+  };
+}
+
+export async function performReorderDisplayedFish(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: ReorderDisplayedFishInput,
+  config: FishTankRuntimeConfig,
+  now: Date,
+  trace: TraceContext
+): Promise<ReorderDisplayedFishResult> {
+  if (!input.idempotencyKey || input.idempotencyKey.length < 8 || input.idempotencyKey.length > 128) {
+    throw new FishTankError("INVALID_IDEMPOTENCY_KEY", "Idempotency key must be between 8 and 128 characters");
+  }
+
+  const normalizedIds = input.displayedFishIds.map((id) => id.trim()).filter((id) => id.length > 0);
+
+  if (normalizedIds.length > DISPLAY_CAPACITY) {
+    const summary = await getTankSummary(prisma, userId, now, config);
+    return {
+      success: false,
+      replayed: false,
+      outcomeCode: "DISPLAY_CAPACITY_EXCEEDED",
+      resultCopy: "最多只能展示 3 条小鱼。",
+      displayedFish: summary.displayedFish,
+      tank: summary
+    };
+  }
+
+  const existingEvent = await prisma.fishTankDisplayOrderEvent.findUnique({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: input.idempotencyKey } }
+  });
+
+  if (existingEvent) {
+    return buildReorderReplayResult(prisma, userId, existingEvent, now, config);
+  }
+
+  const tank = await prisma.userTank.findUnique({ where: { userId } });
+  if (!tank) {
+    throw new FishTankError("TANK_NOT_INITIALIZED", "Initialize your fish tank before reordering displayed fish");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT * FROM user_tanks WHERE user_id = ${userId}::uuid FOR UPDATE`;
+
+    const existingEventAfterLock = await tx.fishTankDisplayOrderEvent.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey: input.idempotencyKey } }
+    });
+
+    if (existingEventAfterLock) {
+      return buildReorderReplayResult(tx, userId, existingEventAfterLock, now, config);
+    }
+
+    const fishRows = await tx.userFish.findMany({
+      where: { userId },
+      include: { definition: true }
+    });
+    const ownedFishById = new Map(fishRows.map((row) => [row.id, row]));
+
+    const seen = new Set<string>();
+    const selectedRows: typeof fishRows = [];
+    for (const id of normalizedIds) {
+      if (seen.has(id)) {
+        return buildReorderInvalidResult(tx, userId, now, config, "DUPLICATE_DISPLAY_SELECTION", "不能重复选择同一条小鱼。");
+      }
+      seen.add(id);
+      const row = ownedFishById.get(id);
+      if (!row) {
+        return buildReorderInvalidResult(tx, userId, now, config, "DISPLAY_FISH_NOT_OWNED", "选择的小鱼不在你的鱼缸里。");
+      }
+      if (!row.definition.active) {
+        return buildReorderInvalidResult(tx, userId, now, config, "FISH_DEFINITION_INACTIVE", "这条小鱼暂时不能展示。");
+      }
+      selectedRows.push(row);
+    }
+
+    const remainingRows = fishRows
+      .filter((row) => !seen.has(row.id))
+      .sort((a, b) => a.displayOrder - b.displayOrder || a.id.localeCompare(b.id));
+
+    const updates: Array<{ id: string; displayOrder: number }> = [];
+    let order = 0;
+    for (const row of selectedRows) {
+      updates.push({ id: row.id, displayOrder: order++ });
+    }
+    for (const row of remainingRows) {
+      updates.push({ id: row.id, displayOrder: order++ });
+    }
+
+    for (const update of updates) {
+      await tx.userFish.update({ where: { id: update.id }, data: { displayOrder: update.displayOrder } });
+    }
+
+    const displayedFishIds = selectedRows.map((row) => row.id);
+    const resultCopy = "展示顺序已保存。";
+
+    await tx.fishTankDisplayOrderEvent.create({
+      data: {
+        userId,
+        idempotencyKey: input.idempotencyKey,
+        displayedFishIds,
+        resultMetadata: {
+          resultCopy,
+          displayedFishIds,
+          requestId: trace.requestId
+        }
+      }
+    });
+
+    const summary = await getTankSummary(tx, userId, now, config);
+
+    return {
+      success: true,
+      replayed: false,
+      outcomeCode: "REORDERED",
+      resultCopy,
+      displayedFish: summary.displayedFish,
+      tank: summary
+    };
+  });
+}
+
+async function buildReorderReplayResult(
+  prisma: PrismaQueryClientLike,
+  userId: string,
+  event: FishTankDisplayOrderEvent,
+  now: Date,
+  config: FishTankRuntimeConfig
+): Promise<ReorderDisplayedFishResult> {
+  const summary = await getTankSummary(prisma, userId, now, config);
+  const metadata = event.resultMetadata as Record<string, unknown>;
+  const originalDisplayedFish = event.displayedFishIds
+    .map((id) => summary.eligibleFish.find((fish) => fish.id === id))
+    .filter((fish): fish is FishTankFish => Boolean(fish));
+  const replayTank = { ...summary, displayedFish: originalDisplayedFish };
+  return {
+    success: true,
+    replayed: true,
+    outcomeCode: "REORDERED",
+    resultCopy: typeof metadata.resultCopy === "string" ? metadata.resultCopy : "展示顺序已保存。",
+    displayedFish: originalDisplayedFish,
+    tank: replayTank
+  };
+}
+
+async function buildReorderInvalidResult(
+  prisma: PrismaQueryClientLike,
+  userId: string,
+  now: Date,
+  config: FishTankRuntimeConfig,
+  outcomeCode: string,
+  resultCopy: string
+): Promise<ReorderDisplayedFishResult> {
+  const summary = await getTankSummary(prisma, userId, now, config);
+  return {
+    success: false,
+    replayed: false,
+    outcomeCode,
+    resultCopy,
+    displayedFish: summary.displayedFish,
     tank: summary
   };
 }

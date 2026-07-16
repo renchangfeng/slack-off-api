@@ -1368,11 +1368,19 @@ components:
                 $ref: "#/components/schemas/AchievementUnlock"
     FishTankSummary:
       type: object
-      required: [initialized, fish, careAvailability, hatchAvailability, collection, mood, moodCopy, nextAction, resourceSummary, decorations]
+      required: [initialized, fish, displayedFish, eligibleFish, careAvailability, hatchAvailability, collection, mood, moodCopy, nextAction, resourceSummary, costs, guidance, decorations]
       properties:
         initialized:
           type: boolean
         fish:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankFish"
+        displayedFish:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankFish"
+        eligibleFish:
           type: array
           items:
             $ref: "#/components/schemas/FishTankFish"
@@ -1390,9 +1398,29 @@ components:
           description: Backward-compatible alias of mood.copy.
         nextAction:
           type: string
-          enum: [initialize, feed, hatch, decor, wait]
+          enum: [initialize, feed, bubble, hatch, decor, companionship]
         resourceSummary:
           $ref: "#/components/schemas/FishTankResourceSummary"
+        costs:
+          type: object
+          required: [feed, bubble]
+          properties:
+            feed:
+              type: integer
+              minimum: 1
+            bubble:
+              type: integer
+              minimum: 1
+        guidance:
+          type: object
+          required: [foodSource, bubbleSource]
+          properties:
+            foodSource:
+              type: string
+              enum: [draw, collection]
+            bubbleSource:
+              type: string
+              enum: [draw, collection]
         decorations:
           $ref: "#/components/schemas/DecorationsSummary"
     FishTankFish:
@@ -1424,9 +1452,21 @@ components:
           format: date-time
     FishTankCareAvailability:
       type: object
-      required: [feed]
+      required: [feed, bubble]
       properties:
         feed:
+          type: object
+          required: [available, nextAvailableAt, cooldownRemainingSeconds]
+          properties:
+            available:
+              type: boolean
+            nextAvailableAt:
+              type: [string, "null"]
+              format: date-time
+            cooldownRemainingSeconds:
+              type: integer
+              minimum: 0
+        bubble:
           type: object
           required: [available, nextAvailableAt, cooldownRemainingSeconds]
           properties:
@@ -1535,19 +1575,32 @@ components:
       properties:
         interactionType:
           type: string
-          enum: [feed]
+          enum: [feed, bubble]
         idempotencyKey:
           type: string
           minLength: 8
           maxLength: 128
     CareInteractionResult:
       type: object
-      required: [success, resultCopy, tank]
+      required: [success, replayed, outcomeCode, resultCopy, resourceType, cost, resourceBalance, tank]
       properties:
         success:
           type: boolean
+        replayed:
+          type: boolean
+        outcomeCode:
+          type: string
         resultCopy:
           type: string
+        resourceType:
+          type: string
+          enum: [feed, bubble]
+        cost:
+          type: integer
+          minimum: 0
+        resourceBalance:
+          type: integer
+          minimum: 0
         tank:
           $ref: "#/components/schemas/FishTankSummary"
     TankMood:
@@ -1658,6 +1711,60 @@ components:
           $ref: "#/components/schemas/EquippedDecoration"
         tank:
           $ref: "#/components/schemas/FishTankSummary"
+    DisplayedFishReorderRequest:
+      type: object
+      additionalProperties: false
+      required: [displayedFishIds, idempotencyKey]
+      properties:
+        displayedFishIds:
+          type: array
+          maxItems: 3
+          items:
+            type: string
+            format: uuid
+        idempotencyKey:
+          type: string
+          minLength: 8
+          maxLength: 128
+    DisplayedFishReorderResult:
+      type: object
+      required: [success, replayed, outcomeCode, resultCopy, displayedFish, tank]
+      properties:
+        success:
+          type: boolean
+        replayed:
+          type: boolean
+        outcomeCode:
+          type: string
+        resultCopy:
+          type: string
+        displayedFish:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankFish"
+        tank:
+          $ref: "#/components/schemas/FishTankSummary"
+    FishTankCareError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [UNSUPPORTED_INTERACTION, INVALID_IDEMPOTENCY_KEY, TANK_NOT_INITIALIZED, COOLDOWN, INSUFFICIENT_FOOD, INSUFFICIENT_BUBBLE, INVALID_DISPLAY_SELECTION, DISPLAY_CAPACITY_EXCEEDED, DISPLAY_FISH_NOT_OWNED, RATE_LIMITED]
+        message:
+          type: string
+        requestId:
+          type: string
+        traceId:
+          type: string
+    FishTankCareErrorEnvelope:
+      type: object
+      required: [data, error]
+      properties:
+        data:
+          type: "null"
+        error:
+          $ref: "#/components/schemas/FishTankCareError"
     FishTankDecorError:
       type: object
       required: [code, message]
@@ -2543,3 +2650,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FishTankDecorErrorEnvelope"
+  /v1/fish-tank/displayed-fish/reorder:
+    post:
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/TraceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DisplayedFishReorderRequest"
+      responses:
+        "200":
+          description: Displayed fish reordered or replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, error]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/DisplayedFishReorderResult"
+                  error:
+                    type: "null"
+        "400":
+          description: Invalid idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankCareErrorEnvelope"
+        "409":
+          description: Tank not initialized or invalid display selection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankCareErrorEnvelope"
+        "429":
+          description: Reorder rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FishTankCareErrorEnvelope"

@@ -10,9 +10,11 @@ import {
   performCareInteraction,
   performEquipDecoration,
   performHatch,
+  performReorderDisplayedFish,
   type CareInteractionInput,
   type EquipDecorationInput,
-  type HatchInput
+  type HatchInput,
+  type ReorderDisplayedFishInput
 } from "../fish-tank/service.js";
 
 export async function registerFishTankRoutes(server: FastifyInstance) {
@@ -27,8 +29,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
         server.prisma,
         request.user!.id,
         new Date(),
-        server.runtimeConfig.fishTank.feedCooldownSeconds,
-        server.runtimeConfig.fishTank.hatchProgressCost
+        server.runtimeConfig.fishTank
       );
       return ok(summary);
     }
@@ -46,8 +47,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           server.prisma,
           request.user!.id,
           server.runtimeConfig.fishTank.starterFishCode,
-          server.runtimeConfig.fishTank.feedCooldownSeconds,
-          server.runtimeConfig.fishTank.hatchProgressCost,
+          server.runtimeConfig.fishTank,
           new Date(),
           request.trace
         );
@@ -86,7 +86,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           additionalProperties: false,
           required: ["interactionType", "idempotencyKey"],
           properties: {
-            interactionType: { type: "string", minLength: 1, maxLength: 32 },
+            interactionType: { type: "string", enum: ["feed", "bubble"] },
             idempotencyKey: { type: "string", minLength: 8, maxLength: 128 }
           }
         }
@@ -100,8 +100,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           server.prisma,
           request.user!.id,
           body,
-          server.runtimeConfig.fishTank.feedCooldownSeconds,
-          server.runtimeConfig.fishTank.hatchProgressCost,
+          server.runtimeConfig.fishTank,
           new Date(),
           request.trace
         );
@@ -114,6 +113,11 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           metadata: {
             interactionType: body.interactionType,
             success: result.success,
+            outcomeCode: result.outcomeCode,
+            replayed: result.replayed,
+            resourceType: result.resourceType,
+            cost: result.cost,
+            resourceBalance: result.resourceBalance,
             resultCopy: result.resultCopy,
             requestId: request.trace.requestId
           },
@@ -155,8 +159,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           server.prisma,
           request.user!.id,
           body,
-          server.runtimeConfig.fishTank.hatchProgressCost,
-          server.runtimeConfig.fishTank.feedCooldownSeconds,
+          server.runtimeConfig.fishTank,
           new Date(),
           request.trace
         );
@@ -229,8 +232,7 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
           server.prisma,
           request.user!.id,
           body,
-          server.runtimeConfig.fishTank.feedCooldownSeconds,
-          server.runtimeConfig.fishTank.hatchProgressCost,
+          server.runtimeConfig.fishTank,
           new Date(),
           request.trace
         );
@@ -295,6 +297,70 @@ export async function registerFishTankRoutes(server: FastifyInstance) {
             trace: request.trace
           });
 
+          return reply.code(statusCode).send(fail(error.code, error.message, request.trace));
+        }
+        throw error;
+      }
+    }
+  );
+
+  server.post(
+    "/v1/fish-tank/displayed-fish/reorder",
+    {
+      ...rateLimitFor(server, "fishTank"),
+      preHandler: [server.requireAuth],
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["displayedFishIds", "idempotencyKey"],
+          properties: {
+            displayedFishIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 3
+            },
+            idempotencyKey: { type: "string", minLength: 8, maxLength: 128 }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const body = request.body as ReorderDisplayedFishInput;
+
+      try {
+        const result = await performReorderDisplayedFish(
+          server.prisma,
+          request.user!.id,
+          body,
+          server.runtimeConfig.fishTank,
+          new Date(),
+          request.trace
+        );
+
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: result.success
+            ? result.replayed
+              ? "fish_tank.display.replayed"
+              : "fish_tank.display.reordered"
+            : "fish_tank.display.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "fish_tank_display_order_event",
+          metadata: {
+            idempotencyKey: body.idempotencyKey,
+            outcomeCode: result.outcomeCode,
+            replayed: result.replayed,
+            displayedFishIds: body.displayedFishIds,
+            requestId: request.trace.requestId
+          },
+          trace: request.trace
+        });
+
+        return ok(result);
+      } catch (error) {
+        if (error instanceof FishTankError) {
+          const statusCode = error.code === "TANK_NOT_INITIALIZED" ? 409 : 400;
           return reply.code(statusCode).send(fail(error.code, error.message, request.trace));
         }
         throw error;
