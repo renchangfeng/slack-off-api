@@ -3,46 +3,14 @@ import Fastify from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
 import { registerConfig } from "../plugins/config.js";
 import { registerObservability } from "../plugins/observability.js";
-import type { RuntimeConfig } from "../config/runtime.js";
+import { createTestRuntimeConfig } from "../config/test-utils.js";
 import { registerCheckInRoutes } from "./checkins.js";
 import { registerLeaderboardRoutes } from "./leaderboards.js";
 
 const userId = "11111111-1111-4111-8111-111111111111";
 const otherUserId = "22222222-2222-4222-8222-222222222222";
 
-const runtimeConfig: RuntimeConfig = {
-  rateLimits: {
-    global: { max: 1000, timeWindow: "1 minute" },
-    otp: { max: 1000, timeWindow: "1 minute" },
-    checkIns: { max: 1000, timeWindow: "1 minute" },
-    activities: { max: 1000, timeWindow: "1 minute" },
-    beanDraws: { max: 1000, timeWindow: "1 minute" },
-    leaderboardReads: { max: 1000, timeWindow: "1 minute" },
-    profileUpdates: { max: 1000, timeWindow: "1 minute" },
-    fishTank: { max: 1000, timeWindow: "1 minute" }
-  },
-  auth: {
-    requireEmailVerified: false
-  },
-  checkIns: {
-    minRewardDurationSeconds: 60,
-    maxSessionSeconds: 60 * 45,
-    dailyRewardedSessionCap: 5,
-    scorePerEligibleMinute: 1,
-    drawProgressPerSession: 1
-  },
-  beans: {
-    drawProgressPerChance: 3
-  },
-  fishTank: {
-    starterFishCode: "starter_goldfish",
-    feedCooldownSeconds: 4 * 60 * 60,
-    bubbleCooldownSeconds: 60 * 60,
-    feedCost: 1,
-    bubbleCost: 1,
-    hatchProgressCost: 3
-  }
-};
+const runtimeConfig = createTestRuntimeConfig();
 
 describe("check-in routes", () => {
   let store: TestStore;
@@ -81,11 +49,33 @@ describe("check-in routes", () => {
         })
       ])
     );
+    expect(body.data.fishTankOutcomes).toEqual([
+      {
+        resourceType: "food",
+        quantity: 1,
+        label: "鱼食",
+        copy: "打卡完成，鱼食 +1。"
+      }
+    ]);
+    expect(store.fishTankResourceLedger.size).toBe(1);
     expect(store.stats.get(userId)).toMatchObject({
       totalSessions: 1,
       currentStreakDays: 1,
       longestStreakDays: 1
     });
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.granted",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            sourceType: "check_in_finish",
+            outcome: "granted",
+            resources: [{ resourceType: "food", quantity: 1 }]
+          })
+        })
+      ])
+    );
 
     await server.close();
   });
@@ -111,12 +101,27 @@ describe("check-in routes", () => {
       rewarded: false,
       achievementsUnlocked: []
     });
+    expect(body.data.fishTankOutcomes).toEqual([]);
     expect(store.rewardLedger).toHaveLength(0);
+    expect(store.fishTankResourceLedger.size).toBe(0);
     expect(store.sessions.get(session.id)).toMatchObject({
       status: CheckInStatus.completed,
       invalidReason: "BELOW_MIN_REWARD_DURATION",
       rewarded: false
     });
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.empty",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            sourceType: "check_in_finish",
+            outcome: "empty",
+            reason: "BELOW_MIN_REWARD_DURATION"
+          })
+        })
+      ])
+    );
 
     await server.close();
   });
@@ -139,6 +144,14 @@ describe("check-in routes", () => {
       drawProgress: 1,
       rewarded: true
     });
+    expect(response.json().data.fishTankOutcomes).toEqual([
+      {
+        resourceType: "food",
+        quantity: 1,
+        label: "鱼食",
+        copy: "打卡完成，鱼食 +1。"
+      }
+    ]);
     expect(store.sessions.get(session.id)).toMatchObject({
       durationSeconds: 2 * 60 * 60,
       eligibleDurationSeconds: 45 * 60,
@@ -159,6 +172,130 @@ describe("check-in routes", () => {
             rawDurationSeconds: 2 * 60 * 60,
             eligibleDurationSeconds: 45 * 60,
             invalidReason: "REWARD_DURATION_CAPPED"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("replays the original fish outcomes on a repeated finish without duplicating grants", async () => {
+    const server = await buildTestServer(store);
+    const startedAt = new Date(Date.now() - 5 * 60 * 1000);
+    const session = store.addSession({ userId, startedAt });
+
+    const first = await server.inject({
+      method: "POST",
+      url: `/v1/check-ins/${session.id}/finish`,
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "finish_replay" }
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.fishTankOutcomes).toHaveLength(1);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+
+    const second = await server.inject({
+      method: "POST",
+      url: `/v1/check-ins/${session.id}/finish`,
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "finish_replay_again" }
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.fishTankOutcomes).toEqual(first.json().data.fishTankOutcomes);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.replayed",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            sourceType: "check_in_finish",
+            outcome: "replayed",
+            resources: [{ resourceType: "food", quantity: 1 }]
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("rolls back check-in stats, reward rows, leaderboard score, and fish resources when fish grant fails", async () => {
+    const server = await buildTestServer(store);
+    const startedAt = new Date(Date.now() - 5 * 60 * 1000);
+    const session = store.addSession({ userId, startedAt });
+    store.fishTankGrantFailure = true;
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/check-ins/${session.id}/finish`,
+      headers: { authorization: "Bearer test" },
+      payload: { idempotencyKey: "finish_rollback" }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(store.sessions.get(session.id)).toMatchObject({
+      status: CheckInStatus.active,
+      rewarded: false,
+      endedAt: null
+    });
+    expect(store.rewardLedger).toHaveLength(0);
+    expect(store.leaderboardScores).toHaveLength(0);
+    expect(store.fishTankResourceLedger.size).toBe(0);
+    expect(store.stats.has(userId)).toBe(false);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.rolled_back",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            sourceType: "check_in_finish",
+            outcome: "rolled_back",
+            policyVersion: "v1",
+            reason: "Error"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("does not duplicate fish resources or rewards across concurrent finishes", async () => {
+    const server = await buildTestServer(store);
+    const startedAt = new Date(Date.now() - 5 * 60 * 1000);
+    const session = store.addSession({ userId, startedAt });
+
+    const [first, second] = await Promise.all([
+      server.inject({
+        method: "POST",
+        url: `/v1/check-ins/${session.id}/finish`,
+        headers: { authorization: "Bearer test" },
+        payload: { idempotencyKey: "finish_concurrent" }
+      }),
+      server.inject({
+        method: "POST",
+        url: `/v1/check-ins/${session.id}/finish`,
+        headers: { authorization: "Bearer test" },
+        payload: { idempotencyKey: "finish_concurrent" }
+      })
+    ]);
+
+    expect([first.statusCode, second.statusCode].filter((code) => code === 200).length).toBeGreaterThanOrEqual(1);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+    expect(store.rewardLedger).toHaveLength(2);
+    expect(store.leaderboardScores).toHaveLength(4);
+    expect(
+      [first, second].map((response) => response.json().data.reward.score).sort((a, b) => a - b)
+    ).toEqual([0, 5]);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.replayed",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            outcome: "replayed"
           })
         })
       ])
@@ -188,6 +325,19 @@ describe("check-in routes", () => {
       rewarded: false
     });
     expect(store.rewardLedger).toHaveLength(0);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.rejected",
+          sourceId: session.id,
+          metadata: expect.objectContaining({
+            sourceType: "check_in_finish",
+            outcome: "rejected",
+            reason: "CHECK_IN_NOT_FOUND"
+          })
+        })
+      ])
+    );
 
     await server.close();
   });
@@ -296,6 +446,7 @@ function createStore() {
   const sessions = new Map<string, TestSession>();
   const stats = new Map<string, TestStats>();
   const rewardLedger: unknown[] = [];
+  const fishTankResourceLedger = new Map<string, Record<string, unknown>>();
   const leaderboardScores: Array<{
     userId: string;
     displayName: string;
@@ -306,13 +457,21 @@ function createStore() {
     equippedTitle?: string | null;
   }> = [];
   const auditEvents: Array<Record<string, unknown>> = [];
+  let fishTankGrantFailure = false;
 
   return {
     sessions,
     stats,
     rewardLedger,
+    fishTankResourceLedger,
     leaderboardScores,
     auditEvents,
+    get fishTankGrantFailure() {
+      return fishTankGrantFailure;
+    },
+    set fishTankGrantFailure(value: boolean) {
+      fishTankGrantFailure = value;
+    },
     addSession(input: { userId: string; startedAt: Date }) {
       const now = new Date();
       const session: TestSession = {
@@ -347,6 +506,55 @@ function createStore() {
   };
 }
 
+type StoreSnapshot = {
+  sessions: Map<string, TestSession>;
+  stats: Map<string, TestStats>;
+  rewardLedger: unknown[];
+  fishTankResourceLedger: Map<string, Record<string, unknown>>;
+  leaderboardScores: Array<{
+    userId: string;
+    displayName: string;
+    window: string;
+    windowStart: Date;
+    score: number;
+    equippedBadge?: string | null;
+    equippedTitle?: string | null;
+  }>;
+  auditEvents: Array<Record<string, unknown>>;
+};
+
+function snapshotStore(store: TestStore): StoreSnapshot {
+  return {
+    sessions: new Map(store.sessions),
+    stats: new Map(store.stats),
+    rewardLedger: [...store.rewardLedger],
+    fishTankResourceLedger: new Map(store.fishTankResourceLedger),
+    leaderboardScores: [...store.leaderboardScores],
+    auditEvents: [...store.auditEvents]
+  };
+}
+
+function restoreStore(store: TestStore, snapshot: StoreSnapshot) {
+  store.sessions.clear();
+  for (const [key, value] of snapshot.sessions) {
+    store.sessions.set(key, value);
+  }
+  store.stats.clear();
+  for (const [key, value] of snapshot.stats) {
+    store.stats.set(key, value);
+  }
+  store.rewardLedger.length = 0;
+  store.rewardLedger.push(...snapshot.rewardLedger);
+  store.fishTankResourceLedger.clear();
+  for (const [key, value] of snapshot.fishTankResourceLedger) {
+    store.fishTankResourceLedger.set(key, value);
+  }
+  store.leaderboardScores.length = 0;
+  store.leaderboardScores.push(...snapshot.leaderboardScores);
+  store.auditEvents.length = 0;
+  store.auditEvents.push(...snapshot.auditEvents);
+}
+
 function createPrismaMock(store: TestStore) {
   const prisma: Record<string, unknown> = {
     checkInSession: {
@@ -375,6 +583,24 @@ function createPrismaMock(store: TestStore) {
         const updated = { ...current, ...data, updatedAt: new Date() };
         store.sessions.set(where.id, updated);
         return updated;
+      },
+      updateMany: async ({
+        where,
+        data
+      }: {
+        where: { id: string; userId: string; status: CheckInStatus };
+        data: Partial<TestSession>;
+      }) => {
+        const current = store.sessions.get(where.id);
+        if (
+          !current ||
+          current.userId !== where.userId ||
+          current.status !== where.status
+        ) {
+          return { count: 0 };
+        }
+        store.sessions.set(where.id, { ...current, ...data, updatedAt: new Date() });
+        return { count: 1 };
       },
       count: async ({ where }: { where: { userId: string; rewarded?: boolean; endedAt?: { gte: Date; lt: Date } } }) =>
         [...store.sessions.values()].filter(
@@ -431,6 +657,45 @@ function createPrismaMock(store: TestStore) {
       createMany: async ({ data }: { data: unknown[] }) => {
         store.rewardLedger.push(...data);
         return { count: data.length };
+      }
+    },
+    fishTankResourceLedger: {
+      upsert: async ({
+        where,
+        create
+      }: {
+        where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } };
+        create: Record<string, unknown>;
+      }) => {
+        if (store.fishTankGrantFailure) {
+          throw new Error("Simulated fish tank grant failure");
+        }
+        const key = `${where.userId_idempotencyKey.userId}:${where.userId_idempotencyKey.idempotencyKey}`;
+        const existing = store.fishTankResourceLedger.get(key);
+        if (existing) {
+          return existing;
+        }
+        const row = { ...create, createdAt: new Date() };
+        store.fishTankResourceLedger.set(key, row);
+        return row;
+      },
+      findMany: async ({
+        where
+      }: {
+        where: {
+          userId?: string;
+          sourceType?: string;
+          sourceId?: string | null;
+          quantity?: { gt?: number };
+        };
+      }) => {
+        return Array.from(store.fishTankResourceLedger.values()).filter((row: Record<string, unknown>) => {
+          if (where.userId !== undefined && row.userId !== where.userId) return false;
+          if (where.sourceType !== undefined && row.sourceType !== where.sourceType) return false;
+          if (where.sourceId !== undefined && row.sourceId !== where.sourceId) return false;
+          if (where.quantity?.gt !== undefined && !(typeof row.quantity === "number" && row.quantity > where.quantity.gt)) return false;
+          return true;
+        });
       }
     },
     leaderboardScore: {
@@ -531,7 +796,15 @@ function createPrismaMock(store: TestStore) {
         return data;
       }
     },
-    $transaction: async <T>(fn: (tx: Record<string, unknown>) => Promise<T>) => fn(prisma)
+    $transaction: async <T>(fn: (tx: Record<string, unknown>) => Promise<T>) => {
+      const snapshot = snapshotStore(store);
+      try {
+        return await fn(prisma);
+      } catch (error) {
+        restoreStore(store, snapshot);
+        throw error;
+      }
+    }
   };
 
   return prisma;

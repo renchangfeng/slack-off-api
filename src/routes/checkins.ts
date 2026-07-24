@@ -4,6 +4,12 @@ import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import { ok } from "../http/envelope.js";
 import { rateLimitFor } from "../rate-limit/policies.js";
+import {
+  buildExistingLoopAuditMetadata,
+  grantExistingLoopRewards,
+  reconstructExistingLoopOutcomes,
+  resolveExistingLoopOutcomes
+} from "../fish-tank/resources.js";
 import { incrementLeaderboardScores } from "./leaderboards.js";
 
 const checkInSessionSchema = {
@@ -187,12 +193,28 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
       const params = request.params as { id: string };
       const now = new Date();
       const rules = server.runtimeConfig.checkIns;
+      const fishTankPolicy = server.runtimeConfig.fishTank.existingLoopRewards;
 
       const session = await server.prisma.checkInSession.findUnique({
         where: { id: params.id }
       });
 
       if (!session || session.userId !== request.user?.id) {
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "check_in_session",
+          sourceId: params.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "check_in_finish",
+            sourceId: params.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rejected",
+            reason: "CHECK_IN_NOT_FOUND"
+          }),
+          trace: request.trace
+        });
         return reply.code(404).send({
           data: null,
           error: {
@@ -205,6 +227,29 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
       }
 
       if (session.status !== CheckInStatus.active) {
+        const fishTankOutcomes = await reconstructExistingLoopOutcomes(server.prisma, request.user!.id, {
+          sourceType: "check_in_finish",
+          sourceId: session.id
+        });
+        await recordAuditEventWithClient(server.prisma, {
+          eventType:
+            fishTankOutcomes.length > 0
+              ? "fish_tank.existing_loop.replayed"
+              : "fish_tank.existing_loop.empty",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "check_in_session",
+          sourceId: session.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "check_in_finish",
+            sourceId: session.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: fishTankOutcomes.length > 0 ? "replayed" : "empty",
+            outcomes: fishTankOutcomes,
+            reason: session.invalidReason ?? undefined
+          }),
+          trace: request.trace
+        });
         return ok({
           session: serializeSession(session),
           reward: {
@@ -213,7 +258,8 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
             drawChancesGranted: 0,
             rewarded: session.rewarded,
             achievementsUnlocked: []
-          }
+          },
+          fishTankOutcomes
         });
       }
 
@@ -242,97 +288,181 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
               ? "BELOW_MIN_REWARD_DURATION"
               : undefined;
 
-      const finished = await server.prisma.$transaction(async (tx) => {
-        const existingStats = await tx.userStats.findUnique({
-          where: { userId: request.user!.id }
-        });
-        const streak = nextStreak(existingStats, rewarded, now);
-        const draw = nextDrawState(
-          existingStats?.drawProgress ?? 0,
-          drawProgress,
-          server.runtimeConfig.beans.drawProgressPerChance
-        );
-        drawChancesGranted = draw.chancesGranted;
-        const updated = await tx.checkInSession.update({
-          where: { id: session.id },
-          data: {
-            endedAt: now,
-            durationSeconds: rawDurationSeconds,
-            eligibleDurationSeconds,
-            status,
-            invalidReason,
-            rewarded
-          }
-        });
+      const plannedFishOutcomes = rewarded
+        ? resolveExistingLoopOutcomes("check_in_finish", fishTankPolicy)
+        : [];
 
-        await tx.userStats.upsert({
-          where: { userId: request.user!.id },
-          create: {
-            userId: request.user!.id,
-            totalSessions: 1,
-            totalDurationSeconds: rawDurationSeconds,
-            eligibleDurationSeconds,
-            currentStreakDays: rewarded ? 1 : 0,
-            longestStreakDays: rewarded ? 1 : 0,
-            lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined,
-            drawProgress: draw.remainingProgress,
-            drawChances: draw.chancesGranted
-          },
-          update: {
-            totalSessions: { increment: 1 },
-            totalDurationSeconds: { increment: rawDurationSeconds },
-            eligibleDurationSeconds: { increment: eligibleDurationSeconds },
-            currentStreakDays: streak.currentStreakDays,
-            longestStreakDays: streak.longestStreakDays,
-            drawProgress: draw.remainingProgress,
-            drawChances: { increment: draw.chancesGranted },
-            lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined
-          }
-        });
-
-        if (rewarded) {
-          const rewardRows: Prisma.RewardLedgerCreateManyInput[] = [
-            {
+      const finished = await server.prisma
+        .$transaction(async (tx) => {
+          const claimed = await tx.checkInSession.updateMany({
+            where: {
+              id: session.id,
               userId: request.user!.id,
-              sourceType: RewardSourceType.check_in,
-              sourceId: session.id,
-              rewardType: RewardType.score,
-              amount: score,
-              metadata: rewardMetadata(request, eligibleDurationSeconds)
+              status: CheckInStatus.active
             },
-            {
-              userId: request.user!.id,
-              sourceType: RewardSourceType.check_in,
-              sourceId: session.id,
-              rewardType: RewardType.draw_progress,
-              amount: drawProgress,
-              metadata: rewardMetadata(request, eligibleDurationSeconds)
+            data: {
+              endedAt: now,
+              durationSeconds: rawDurationSeconds,
+              eligibleDurationSeconds,
+              status,
+              invalidReason,
+              rewarded
             }
-          ];
+          });
+          if (claimed.count === 0) {
+            return null;
+          }
 
-          if (draw.chancesGranted > 0) {
-            rewardRows.push({
+          const existingStats = await tx.userStats.findUnique({
+            where: { userId: request.user!.id }
+          });
+          const streak = nextStreak(existingStats, rewarded, now);
+          const draw = nextDrawState(
+            existingStats?.drawProgress ?? 0,
+            drawProgress,
+            server.runtimeConfig.beans.drawProgressPerChance
+          );
+          drawChancesGranted = draw.chancesGranted;
+          await tx.userStats.upsert({
+            where: { userId: request.user!.id },
+            create: {
               userId: request.user!.id,
-              sourceType: RewardSourceType.check_in,
+              totalSessions: 1,
+              totalDurationSeconds: rawDurationSeconds,
+              eligibleDurationSeconds,
+              currentStreakDays: rewarded ? 1 : 0,
+              longestStreakDays: rewarded ? 1 : 0,
+              lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined,
+              drawProgress: draw.remainingProgress,
+              drawChances: draw.chancesGranted
+            },
+            update: {
+              totalSessions: { increment: 1 },
+              totalDurationSeconds: { increment: rawDurationSeconds },
+              eligibleDurationSeconds: { increment: eligibleDurationSeconds },
+              currentStreakDays: streak.currentStreakDays,
+              longestStreakDays: streak.longestStreakDays,
+              drawProgress: draw.remainingProgress,
+              drawChances: { increment: draw.chancesGranted },
+              lastEligibleCheckinDate: rewarded ? todayUtc(now) : undefined
+            }
+          });
+
+          if (rewarded) {
+            const rewardRows: Prisma.RewardLedgerCreateManyInput[] = [
+              {
+                userId: request.user!.id,
+                sourceType: RewardSourceType.check_in,
+                sourceId: session.id,
+                rewardType: RewardType.score,
+                amount: score,
+                metadata: rewardMetadata(request, eligibleDurationSeconds)
+              },
+              {
+                userId: request.user!.id,
+                sourceType: RewardSourceType.check_in,
+                sourceId: session.id,
+                rewardType: RewardType.draw_progress,
+                amount: drawProgress,
+                metadata: rewardMetadata(request, eligibleDurationSeconds)
+              }
+            ];
+
+            if (draw.chancesGranted > 0) {
+              rewardRows.push({
+                userId: request.user!.id,
+                sourceType: RewardSourceType.check_in,
+                sourceId: session.id,
+                rewardType: RewardType.draw_chance,
+                amount: draw.chancesGranted,
+                metadata: rewardMetadata(request, eligibleDurationSeconds)
+              });
+            }
+
+            await tx.rewardLedger.createMany({
+              data: rewardRows
+            });
+            await incrementLeaderboardScores(tx, {
+              userId: request.user!.id,
+              score,
+              now
+            });
+
+            await grantExistingLoopRewards(tx, request.user!.id, {
+              sourceType: "check_in_finish",
               sourceId: session.id,
-              rewardType: RewardType.draw_chance,
-              amount: draw.chancesGranted,
-              metadata: rewardMetadata(request, eligibleDurationSeconds)
+              policyVersion: fishTankPolicy.policyVersion,
+              outcomes: plannedFishOutcomes,
+              requestId: request.trace.requestId,
+              traceId: request.trace.traceId
             });
           }
 
-          await tx.rewardLedger.createMany({
-            data: rewardRows
+          return tx.checkInSession.findUnique({ where: { id: session.id } });
+        })
+        .catch(async (error) => {
+          await recordAuditEventWithClient(server.prisma, {
+            eventType: "fish_tank.existing_loop.rolled_back",
+            actorUserId: request.user!.id,
+            targetUserId: request.user!.id,
+            sourceType: "check_in_session",
+            sourceId: session.id,
+            metadata: buildExistingLoopAuditMetadata({
+              sourceType: "check_in_finish",
+              sourceId: session.id,
+              policyVersion: fishTankPolicy.policyVersion,
+              outcome: "rolled_back",
+              outcomes: plannedFishOutcomes,
+              reason: error instanceof Error ? error.name : "UNKNOWN_ERROR"
+            }),
+            trace: request.trace
           });
-          await incrementLeaderboardScores(tx, {
-            userId: request.user!.id,
-            score,
-            now
-          });
-        }
+          throw error;
+        });
 
-        return updated;
-      });
+      if (!finished) {
+        const replayedSession = await server.prisma.checkInSession.findUnique({
+          where: { id: session.id }
+        });
+        const fishTankOutcomes = await reconstructExistingLoopOutcomes(
+          server.prisma,
+          request.user!.id,
+          {
+            sourceType: "check_in_finish",
+            sourceId: session.id
+          }
+        );
+        await recordAuditEventWithClient(server.prisma, {
+          eventType:
+            fishTankOutcomes.length > 0
+              ? "fish_tank.existing_loop.replayed"
+              : "fish_tank.existing_loop.empty",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "check_in_session",
+          sourceId: session.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "check_in_finish",
+            sourceId: session.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: fishTankOutcomes.length > 0 ? "replayed" : "empty",
+            outcomes: fishTankOutcomes,
+            reason: "CONCURRENT_REPLAY"
+          }),
+          trace: request.trace
+        });
+        return ok({
+          session: serializeSession(replayedSession ?? session),
+          reward: {
+            score: 0,
+            drawProgress: 0,
+            drawChancesGranted: 0,
+            rewarded: replayedSession?.rewarded ?? false,
+            achievementsUnlocked: []
+          },
+          fishTankOutcomes
+        });
+      }
 
       await recordAuditEventWithClient(server.prisma, {
         eventType: "check_in.finished",
@@ -355,6 +485,24 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
         trace: request.trace
       });
 
+      if (!rewarded) {
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.empty",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "check_in_session",
+          sourceId: session.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "check_in_finish",
+            sourceId: session.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "empty",
+            reason: invalidReason
+          }),
+          trace: request.trace
+        });
+      }
+
       if (rewarded) {
         await recordAuditEventWithClient(server.prisma, {
           eventType: "leaderboard.projected",
@@ -366,6 +514,23 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
             windows: ["daily", "weekly", "monthly", "all_time"],
             score
           },
+          trace: request.trace
+        });
+        const fishOutcome = plannedFishOutcomes.length > 0 ? "granted" : "empty";
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: `fish_tank.existing_loop.${fishOutcome}`,
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "check_in_session",
+          sourceId: session.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "check_in_finish",
+            sourceId: session.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: fishOutcome,
+            outcomes: plannedFishOutcomes,
+            reason: fishOutcome === "empty" ? "POLICY_EMPTY" : undefined
+          }),
           trace: request.trace
         });
       }
@@ -380,7 +545,8 @@ export async function registerCheckInRoutes(server: FastifyInstance) {
 
       return ok({
         session: serializeSession(finished),
-        reward: { score, drawProgress, drawChancesGranted, rewarded, achievementsUnlocked }
+        reward: { score, drawProgress, drawChancesGranted, rewarded, achievementsUnlocked },
+        fishTankOutcomes: plannedFishOutcomes
       });
     }
   );

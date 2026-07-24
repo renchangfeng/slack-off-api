@@ -9,7 +9,7 @@ import {
 } from "@prisma/client";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { RuntimeConfig } from "../config/runtime.js";
+import { createTestRuntimeConfig } from "../config/test-utils.js";
 import { registerConfig } from "../plugins/config.js";
 import { registerObservability } from "../plugins/observability.js";
 import { registerActivityRoutes } from "./activities.js";
@@ -18,35 +18,7 @@ const userId = "11111111-1111-4111-8111-111111111111";
 const otherUserId = "22222222-2222-4222-8222-222222222222";
 const templateId = "33333333-3333-4333-8333-333333333333";
 
-const runtimeConfig: RuntimeConfig = {
-  rateLimits: {
-    global: { max: 1000, timeWindow: "1 minute" },
-    otp: { max: 1000, timeWindow: "1 minute" },
-    checkIns: { max: 1000, timeWindow: "1 minute" },
-    activities: { max: 1000, timeWindow: "1 minute" },
-    beanDraws: { max: 1000, timeWindow: "1 minute" },
-    leaderboardReads: { max: 1000, timeWindow: "1 minute" },
-    profileUpdates: { max: 1000, timeWindow: "1 minute" },
-    fishTank: { max: 1000, timeWindow: "1 minute" }
-  },
-  auth: { requireEmailVerified: false },
-  checkIns: {
-    minRewardDurationSeconds: 60,
-    maxSessionSeconds: 60 * 45,
-    dailyRewardedSessionCap: 5,
-    scorePerEligibleMinute: 1,
-    drawProgressPerSession: 1
-  },
-  beans: { drawProgressPerChance: 3 },
-  fishTank: {
-    starterFishCode: "starter_goldfish",
-    feedCooldownSeconds: 4 * 60 * 60,
-    bubbleCooldownSeconds: 60 * 60,
-    feedCost: 1,
-    bubbleCost: 1,
-    hatchProgressCost: 3
-  }
-};
+const runtimeConfig = createTestRuntimeConfig();
 
 describe("activity routes", () => {
   let store: TestStore;
@@ -265,10 +237,28 @@ describe("activity routes", () => {
         })
       ])
     );
+    expect(response.json().data.fishTankOutcomes).toEqual([
+      {
+        resourceType: "bubble",
+        quantity: 1,
+        label: "气泡",
+        copy: "活动完成，气泡 +1。"
+      }
+    ]);
+    expect(store.fishTankResourceLedger.size).toBe(1);
     expect(store.auditEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           eventType: "activity.complete.rewarded"
+        }),
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.granted",
+          sourceId: assignment.id,
+          metadata: expect.objectContaining({
+            sourceType: "activity_completion",
+            outcome: "granted",
+            resources: [{ resourceType: "bubble", quantity: 1 }]
+          })
         })
       ])
     );
@@ -322,12 +312,131 @@ describe("activity routes", () => {
       rewarded: false,
       reason: "DAILY_LIMIT_REACHED"
     });
+    expect(response.json().data.fishTankOutcomes).toEqual([]);
     expect(store.rewardLedger).toHaveLength(0);
+    expect(store.fishTankResourceLedger.size).toBe(0);
     expect(store.auditEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           eventType: "activity.complete.no_reward",
           metadata: expect.objectContaining({ dailyLimitReached: true })
+        }),
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.empty",
+          sourceId: assignment.id,
+          metadata: expect.objectContaining({
+            sourceType: "activity_completion",
+            outcome: "empty",
+            reason: "DAILY_LIMIT_REACHED"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("replays original fish outcomes on repeated completion without duplicating grants", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+
+    const first = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().data.fishTankOutcomes).toHaveLength(1);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+
+    const second = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.fishTankOutcomes).toEqual(first.json().data.fishTankOutcomes);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+
+    await server.close();
+  });
+
+  it("rolls back assignment, stats, reward rows, leaderboard score, and fish resources when fish grant fails", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+    store.fishTankGrantFailure = true;
+
+    const response = await server.inject({
+      method: "POST",
+      url: `/v1/activities/${assignment.id}/complete`,
+      headers: { authorization: "Bearer test" },
+      payload: gameInteractionProgress()
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(store.assignments[0]).toMatchObject({
+      status: ActivityAssignmentStatus.active,
+      rewarded: false,
+      completedAt: null
+    });
+    expect(store.rewardLedger).toHaveLength(0);
+    expect(store.leaderboardScores).toHaveLength(0);
+    expect(store.fishTankResourceLedger.size).toBe(0);
+    expect(store.stats.has(userId)).toBe(false);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.rolled_back",
+          sourceId: assignment.id,
+          metadata: expect.objectContaining({
+            sourceType: "activity_completion",
+            outcome: "rolled_back",
+            policyVersion: "v1",
+            reason: "Error"
+          })
+        })
+      ])
+    );
+
+    await server.close();
+  });
+
+  it("does not duplicate fish resources or rewards across concurrent completions", async () => {
+    const server = await buildTestServer(store);
+    const assignment = store.addAssignment({ userId });
+
+    const [first, second] = await Promise.all([
+      server.inject({
+        method: "POST",
+        url: `/v1/activities/${assignment.id}/complete`,
+        headers: { authorization: "Bearer test" },
+        payload: gameInteractionProgress()
+      }),
+      server.inject({
+        method: "POST",
+        url: `/v1/activities/${assignment.id}/complete`,
+        headers: { authorization: "Bearer test" },
+        payload: gameInteractionProgress()
+      })
+    ]);
+
+    expect([first.statusCode, second.statusCode].filter((code) => code === 200).length).toBeGreaterThanOrEqual(1);
+    expect(store.fishTankResourceLedger.size).toBe(1);
+    expect(store.rewardLedger).toHaveLength(2);
+    expect(store.leaderboardScores).toHaveLength(4);
+    expect(
+      [first, second].map((response) => response.json().data.reward.score).sort((a, b) => a - b)
+    ).toEqual([0, 8]);
+    expect(store.auditEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.replayed",
+          sourceId: assignment.id,
+          metadata: expect.objectContaining({
+            outcome: "replayed"
+          })
         })
       ])
     );
@@ -360,6 +469,15 @@ describe("activity routes", () => {
         expect.objectContaining({
           eventType: "activity.complete.rejected",
           metadata: { reason: "ACTIVITY_EXPIRED" }
+        }),
+        expect.objectContaining({
+          eventType: "fish_tank.existing_loop.rejected",
+          sourceId: assignment.id,
+          metadata: expect.objectContaining({
+            sourceType: "activity_completion",
+            outcome: "rejected",
+            reason: "ACTIVITY_EXPIRED"
+          })
         })
       ])
     );
@@ -1071,9 +1189,11 @@ function createStore() {
   const assignments: TestAssignment[] = [];
   const stats = new Map<string, { userId: string; drawProgress: number; drawChances: number }>();
   const rewardLedger: Array<Record<string, unknown>> = [];
+  const fishTankResourceLedger = new Map<string, Record<string, unknown>>();
   const leaderboardScores: Array<Record<string, unknown>> = [];
   const auditEvents: Array<Record<string, unknown>> = [];
   const feedbackEvents: TestFeedbackEvent[] = [];
+  let fishTankGrantFailure = false;
 
   return {
     template,
@@ -1085,9 +1205,16 @@ function createStore() {
     },
     stats,
     rewardLedger,
+    fishTankResourceLedger,
     leaderboardScores,
     auditEvents,
     feedbackEvents,
+    get fishTankGrantFailure() {
+      return fishTankGrantFailure;
+    },
+    set fishTankGrantFailure(value: boolean) {
+      fishTankGrantFailure = value;
+    },
     addAssignment(input: {
       userId: string;
       status?: ActivityAssignmentStatus;
@@ -1114,6 +1241,49 @@ function createStore() {
       return assignment;
     }
   };
+}
+
+type StoreSnapshot = {
+  assignments: TestAssignment[];
+  stats: Map<string, { userId: string; drawProgress: number; drawChances: number }>;
+  rewardLedger: Array<Record<string, unknown>>;
+  fishTankResourceLedger: Map<string, Record<string, unknown>>;
+  leaderboardScores: Array<Record<string, unknown>>;
+  auditEvents: Array<Record<string, unknown>>;
+  feedbackEvents: TestFeedbackEvent[];
+};
+
+function snapshotStore(store: TestStore): StoreSnapshot {
+  return {
+    assignments: store.assignments.map((assignment) => ({ ...assignment })),
+    stats: new Map(store.stats),
+    rewardLedger: [...store.rewardLedger],
+    fishTankResourceLedger: new Map(store.fishTankResourceLedger),
+    leaderboardScores: [...store.leaderboardScores],
+    auditEvents: [...store.auditEvents],
+    feedbackEvents: [...store.feedbackEvents]
+  };
+}
+
+function restoreStore(store: TestStore, snapshot: StoreSnapshot) {
+  store.assignments.length = 0;
+  store.assignments.push(...snapshot.assignments);
+  store.stats.clear();
+  for (const [key, value] of snapshot.stats) {
+    store.stats.set(key, value);
+  }
+  store.rewardLedger.length = 0;
+  store.rewardLedger.push(...snapshot.rewardLedger);
+  store.fishTankResourceLedger.clear();
+  for (const [key, value] of snapshot.fishTankResourceLedger) {
+    store.fishTankResourceLedger.set(key, value);
+  }
+  store.leaderboardScores.length = 0;
+  store.leaderboardScores.push(...snapshot.leaderboardScores);
+  store.auditEvents.length = 0;
+  store.auditEvents.push(...snapshot.auditEvents);
+  store.feedbackEvents.length = 0;
+  store.feedbackEvents.push(...snapshot.feedbackEvents);
 }
 
 function createPrismaMock(store: TestStore) {
@@ -1252,6 +1422,28 @@ function createPrismaMock(store: TestStore) {
         }
         Object.assign(assignment, data);
         return assignment;
+      },
+      updateMany: async ({
+        where,
+        data
+      }: {
+        where: {
+          id: string;
+          userId: string;
+          status: ActivityAssignmentStatus;
+        };
+        data: Partial<TestAssignment>;
+      }) => {
+        const assignment = store.assignments.find((item) => item.id === where.id);
+        if (
+          !assignment ||
+          assignment.userId !== where.userId ||
+          assignment.status !== where.status
+        ) {
+          return { count: 0 };
+        }
+        Object.assign(assignment, data);
+        return { count: 1 };
       }
     },
     userStats: {
@@ -1280,6 +1472,45 @@ function createPrismaMock(store: TestStore) {
       createMany: async ({ data }: { data: Array<Record<string, unknown>> }) => {
         store.rewardLedger.push(...data);
         return { count: data.length };
+      }
+    },
+    fishTankResourceLedger: {
+      upsert: async ({
+        where,
+        create
+      }: {
+        where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } };
+        create: Record<string, unknown>;
+      }) => {
+        if (store.fishTankGrantFailure) {
+          throw new Error("Simulated fish tank grant failure");
+        }
+        const key = `${where.userId_idempotencyKey.userId}:${where.userId_idempotencyKey.idempotencyKey}`;
+        const existing = store.fishTankResourceLedger.get(key);
+        if (existing) {
+          return existing;
+        }
+        const row = { ...create, createdAt: new Date() };
+        store.fishTankResourceLedger.set(key, row);
+        return row;
+      },
+      findMany: async ({
+        where
+      }: {
+        where: {
+          userId?: string;
+          sourceType?: string;
+          sourceId?: string | null;
+          quantity?: { gt?: number };
+        };
+      }) => {
+        return Array.from(store.fishTankResourceLedger.values()).filter((row: Record<string, unknown>) => {
+          if (where.userId !== undefined && row.userId !== where.userId) return false;
+          if (where.sourceType !== undefined && row.sourceType !== where.sourceType) return false;
+          if (where.sourceId !== undefined && row.sourceId !== where.sourceId) return false;
+          if (where.quantity?.gt !== undefined && !(typeof row.quantity === "number" && row.quantity > where.quantity.gt)) return false;
+          return true;
+        });
       }
     },
     leaderboardScore: {
@@ -1378,7 +1609,15 @@ function createPrismaMock(store: TestStore) {
         return data;
       }
     },
-    $transaction: async <T>(fn: (tx: Record<string, unknown>) => Promise<T>) => fn(prisma)
+    $transaction: async <T>(fn: (tx: Record<string, unknown>) => Promise<T>) => {
+      const snapshot = snapshotStore(store);
+      try {
+        return await fn(prisma);
+      } catch (error) {
+        restoreStore(store, snapshot);
+        throw error;
+      }
+    }
   };
 
   return prisma;

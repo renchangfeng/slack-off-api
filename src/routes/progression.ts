@@ -8,6 +8,13 @@ import {
 } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { recordAuditEventWithClient } from "../audit/events.js";
+import {
+  buildExistingLoopAuditMetadata,
+  grantExistingLoopRewards,
+  reconstructExistingLoopOutcomes,
+  resolveExistingLoopOutcomes,
+  type ExistingRewardSourceType
+} from "../fish-tank/resources.js";
 import { fail, ok } from "../http/envelope.js";
 import { calculateProgressionLevel, levelTransition, utcDayRange } from "../progression/calculate.js";
 import {
@@ -74,8 +81,26 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
       const periodState = period === ProgressionPeriodType.daily
         ? summary.dailyGoals
         : summary.weeklyGoals;
+      const fishTankPolicy = server.runtimeConfig.fishTank.existingLoopRewards;
+      const sourceType: ExistingRewardSourceType =
+        period === ProgressionPeriodType.daily ? "daily_goal_claim" : "weekly_goal_claim";
 
       if (!periodState.allCompleted) {
+        const rejectedSourceId = `${period}:${periodState.periodStart.toISOString()}`;
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rejected",
+          actorUserId: userId,
+          targetUserId: userId,
+          sourceType: "progression_goal_period",
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType,
+            sourceId: rejectedSourceId,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rejected",
+            reason: "GOAL_PERIOD_INCOMPLETE"
+          }),
+          trace: request.trace
+        });
         return reply
           .code(409)
           .send(fail("GOAL_PERIOD_INCOMPLETE", "Complete all goals before claiming", request.trace));
@@ -83,22 +108,29 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
 
       const rewardConfig = goalPeriodRewards[period];
       const beforeExperience = summary.experience;
+      const plannedFishOutcomes = resolveExistingLoopOutcomes(sourceType, fishTankPolicy);
+
       const result = await server.prisma.$transaction(async (tx) => {
-        const row = await tx.progressionGoalPeriod.upsert({
+        await tx.progressionGoalPeriod.createMany({
+          data: [{
+            userId,
+            periodType: period,
+            periodStart: periodState.periodStart
+          }],
+          skipDuplicates: true
+        });
+        const row = await tx.progressionGoalPeriod.findUnique({
           where: {
             userId_periodType_periodStart: {
               userId,
               periodType: period,
               periodStart: periodState.periodStart
             }
-          },
-          create: {
-            userId,
-            periodType: period,
-            periodStart: periodState.periodStart
-          },
-          update: {}
+          }
         });
+        if (!row) {
+          throw new Error("Progression goal period was not persisted");
+        }
 
         const claimed = await tx.progressionGoalPeriod.updateMany({
           where: { id: row.id, claimedAt: null },
@@ -107,6 +139,7 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
         if (claimed.count === 0) {
           return {
             awarded: false,
+            sourceId: row.id,
             claimedAt: row.claimedAt ?? now,
             drawProgress: 0,
             drawChancesGranted: 0
@@ -178,13 +211,48 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
           now
         });
 
+        await grantExistingLoopRewards(tx, userId, {
+          sourceType,
+          sourceId: row.id,
+          policyVersion: fishTankPolicy.policyVersion,
+          outcomes: plannedFishOutcomes,
+          requestId: request.trace.requestId,
+          traceId: request.trace.traceId
+        });
+
         return {
           awarded: true,
+          sourceId: row.id,
           claimedAt: now,
           drawProgress: rewardConfig.drawProgress,
           drawChancesGranted: draw.chancesGranted
         };
+      }).catch(async (error) => {
+        const rolledBackSourceId = `${period}:${periodState.periodStart.toISOString()}`;
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rolled_back",
+          actorUserId: userId,
+          targetUserId: userId,
+          sourceType: "progression_goal_period",
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType,
+            sourceId: rolledBackSourceId,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rolled_back",
+            outcomes: plannedFishOutcomes,
+            reason: error instanceof Error ? error.name : "UNKNOWN_ERROR"
+          }),
+          trace: request.trace
+        });
+        throw error;
       });
+
+      const fishTankOutcomes = result.awarded
+        ? plannedFishOutcomes
+        : await reconstructExistingLoopOutcomes(server.prisma, userId, {
+            sourceType,
+            sourceId: result.sourceId
+          });
 
       const afterExperience = beforeExperience + (result.awarded ? rewardConfig.score : 0);
       const transition = levelTransition(beforeExperience, afterExperience);
@@ -208,6 +276,29 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
         trace: request.trace
       });
 
+      const fishOutcome =
+        result.awarded && fishTankOutcomes.length > 0
+          ? "granted"
+          : !result.awarded && fishTankOutcomes.length > 0
+            ? "replayed"
+            : "empty";
+      await recordAuditEventWithClient(server.prisma, {
+        eventType: `fish_tank.existing_loop.${fishOutcome}`,
+        actorUserId: userId,
+        targetUserId: userId,
+        sourceType: "progression_goal_period",
+        sourceId: result.sourceId,
+        metadata: buildExistingLoopAuditMetadata({
+          sourceType,
+          sourceId: result.sourceId,
+          policyVersion: fishTankPolicy.policyVersion,
+          outcome: fishOutcome,
+          outcomes: fishTankOutcomes,
+          reason: result.awarded && fishOutcome === "empty" ? "POLICY_EMPTY" : undefined
+        }),
+        trace: request.trace
+      });
+
       return ok({
         period,
         awarded: result.awarded,
@@ -220,7 +311,8 @@ export async function registerProgressionRoutes(server: FastifyInstance) {
         progression: {
           ...calculateProgressionLevel(afterExperience),
           ...transition
-        }
+        },
+        fishTankOutcomes
       });
     }
   );

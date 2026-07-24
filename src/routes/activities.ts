@@ -13,6 +13,12 @@ import type { FastifyInstance } from "fastify";
 import { evaluateAchievements } from "../achievements/evaluator.js";
 import { recordAuditEventWithClient } from "../audit/events.js";
 import {
+  buildExistingLoopAuditMetadata,
+  grantExistingLoopRewards,
+  reconstructExistingLoopOutcomes,
+  resolveExistingLoopOutcomes
+} from "../fish-tank/resources.js";
+import {
   buildActivityInteraction,
   buildActivityPresentation,
   pickCompletionFeedback,
@@ -350,18 +356,57 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       const params = request.params as { assignmentId: string };
       const body = (request.body ?? {}) as { interaction?: ActivityInteractionProgress };
       const now = new Date();
+      const fishTankPolicy = server.runtimeConfig.fishTank.existingLoopRewards;
       const assignment = await server.prisma.activityAssignment.findUnique({
         where: { id: params.assignmentId },
         include: { template: true }
       });
 
       if (!assignment || assignment.userId !== request.user?.id) {
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: params.assignmentId,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: params.assignmentId,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rejected",
+            reason: "ACTIVITY_NOT_FOUND"
+          }),
+          trace: request.trace
+        });
         return reply
           .code(404)
           .send(fail("ACTIVITY_NOT_FOUND", "Activity assignment not found", request.trace));
       }
 
       if (assignment.status !== ActivityAssignmentStatus.active) {
+        const fishTankOutcomes = await reconstructExistingLoopOutcomes(server.prisma, request.user!.id, {
+          sourceType: "activity_completion",
+          sourceId: assignment.id
+        });
+        await recordAuditEventWithClient(server.prisma, {
+          eventType:
+            fishTankOutcomes.length > 0
+              ? "fish_tank.existing_loop.replayed"
+              : "fish_tank.existing_loop.empty",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: assignment.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: fishTankOutcomes.length > 0 ? "replayed" : "empty",
+            outcomes: fishTankOutcomes,
+            reason: assignment.rewarded ? undefined : "ALREADY_COMPLETED"
+          }),
+          trace: request.trace
+        });
         return ok({
           assignment: serializeAssignment(assignment),
           reward: {
@@ -371,7 +416,8 @@ export async function registerActivityRoutes(server: FastifyInstance) {
             rewarded: assignment.rewarded,
             reason: "ALREADY_COMPLETED",
             achievementsUnlocked: []
-          }
+          },
+          fishTankOutcomes
         });
       }
 
@@ -387,6 +433,21 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           sourceType: "activity_assignment",
           sourceId: assignment.id,
           metadata: { reason: "ACTIVITY_EXPIRED" },
+          trace: request.trace
+        });
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: assignment.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rejected",
+            reason: "ACTIVITY_EXPIRED"
+          }),
           trace: request.trace
         });
 
@@ -410,6 +471,21 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           },
           trace: request.trace
         });
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rejected",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: assignment.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rejected",
+            reason: "INTERACTION_INCOMPLETE"
+          }),
+          trace: request.trace
+        });
 
         return reply
           .code(409)
@@ -424,19 +500,30 @@ export async function registerActivityRoutes(server: FastifyInstance) {
       );
       const dailyLimitReached = dailyCompleted >= assignment.template.dailyRewardLimit;
       const rewardConfig = toRewardConfig(assignment.template.rewardConfig);
+      const plannedFishOutcomes = !dailyLimitReached
+        ? resolveExistingLoopOutcomes("activity_completion", fishTankPolicy)
+        : [];
       let drawChancesGranted = 0;
       const reward = await server.prisma.$transaction(async (tx) => {
-        await tx.activityAssignment.update({
-          where: { id: assignment.id },
+        const claimed = await tx.activityAssignment.updateMany({
+          where: {
+            id: assignment.id,
+            userId: request.user!.id,
+            status: ActivityAssignmentStatus.active
+          },
           data: {
             status: ActivityAssignmentStatus.completed,
             completedAt: now,
             rewarded: !dailyLimitReached
           }
         });
+        if (claimed.count === 0) {
+          return { concurrentReplay: true as const };
+        }
 
         if (dailyLimitReached) {
           return {
+            concurrentReplay: false as const,
             score: 0,
             drawProgress: 0,
             drawChancesGranted: 0,
@@ -490,14 +577,89 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           await tx.rewardLedger.createMany({ data: rewardRows });
         }
 
+        await grantExistingLoopRewards(tx, request.user!.id, {
+          sourceType: "activity_completion",
+          sourceId: assignment.id,
+          policyVersion: fishTankPolicy.policyVersion,
+          outcomes: plannedFishOutcomes,
+          requestId: request.trace.requestId,
+          traceId: request.trace.traceId
+        });
+
         return {
+          concurrentReplay: false as const,
           score: rewardConfig.score ?? 0,
           drawProgress: rewardConfig.drawProgress ?? 0,
           drawChancesGranted: draw.chancesGranted,
           rewarded: true,
           reason: null
         };
+      }).catch(async (error) => {
+        await recordAuditEventWithClient(server.prisma, {
+          eventType: "fish_tank.existing_loop.rolled_back",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: assignment.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: "rolled_back",
+            outcomes: plannedFishOutcomes,
+            reason: error instanceof Error ? error.name : "UNKNOWN_ERROR"
+          }),
+          trace: request.trace
+        });
+        throw error;
       });
+
+      if (reward.concurrentReplay) {
+        const replayedAssignment = await server.prisma.activityAssignment.findUnique({
+          where: { id: assignment.id },
+          include: { template: true }
+        });
+        const fishTankOutcomes = await reconstructExistingLoopOutcomes(
+          server.prisma,
+          request.user!.id,
+          {
+            sourceType: "activity_completion",
+            sourceId: assignment.id
+          }
+        );
+        await recordAuditEventWithClient(server.prisma, {
+          eventType:
+            fishTankOutcomes.length > 0
+              ? "fish_tank.existing_loop.replayed"
+              : "fish_tank.existing_loop.empty",
+          actorUserId: request.user!.id,
+          targetUserId: request.user!.id,
+          sourceType: "activity_assignment",
+          sourceId: assignment.id,
+          metadata: buildExistingLoopAuditMetadata({
+            sourceType: "activity_completion",
+            sourceId: assignment.id,
+            policyVersion: fishTankPolicy.policyVersion,
+            outcome: fishTankOutcomes.length > 0 ? "replayed" : "empty",
+            outcomes: fishTankOutcomes,
+            reason: "CONCURRENT_REPLAY"
+          }),
+          trace: request.trace
+        });
+        const currentAssignment = replayedAssignment ?? assignment;
+        return ok({
+          assignment: serializeAssignment(currentAssignment),
+          reward: {
+            score: 0,
+            drawProgress: 0,
+            drawChancesGranted: 0,
+            rewarded: currentAssignment.rewarded,
+            reason: "ALREADY_COMPLETED",
+            achievementsUnlocked: []
+          },
+          fishTankOutcomes
+        });
+      }
 
       await recordAuditEventWithClient(server.prisma, {
         eventType: dailyLimitReached ? "activity.complete.no_reward" : "activity.complete.rewarded",
@@ -517,6 +679,25 @@ export async function registerActivityRoutes(server: FastifyInstance) {
         trace: request.trace
       });
 
+      const fishOutcome =
+        reward.rewarded && plannedFishOutcomes.length > 0 ? "granted" : "empty";
+      await recordAuditEventWithClient(server.prisma, {
+        eventType: `fish_tank.existing_loop.${fishOutcome}`,
+        actorUserId: request.user!.id,
+        targetUserId: request.user!.id,
+        sourceType: "activity_assignment",
+        sourceId: assignment.id,
+        metadata: buildExistingLoopAuditMetadata({
+          sourceType: "activity_completion",
+          sourceId: assignment.id,
+          policyVersion: fishTankPolicy.policyVersion,
+          outcome: fishOutcome,
+          outcomes: plannedFishOutcomes,
+          reason: reward.rewarded ? (fishOutcome === "empty" ? "POLICY_EMPTY" : undefined) : "DAILY_LIMIT_REACHED"
+        }),
+        trace: request.trace
+      });
+
       const achievementsUnlocked = await evaluateAchievements(server.prisma, {
         userId: request.user!.id,
         now,
@@ -531,13 +712,18 @@ export async function registerActivityRoutes(server: FastifyInstance) {
           rewarded: reward.rewarded
         }),
         reward: {
-          ...reward,
+          score: reward.score,
+          drawProgress: reward.drawProgress,
+          drawChancesGranted: reward.drawChancesGranted,
+          rewarded: reward.rewarded,
+          reason: reward.reason,
           achievementsUnlocked
         },
         feedback: pickCompletionFeedback(interaction, assignment.id),
         resultTitle: interaction.resultSummary.title,
         resultCopy: interaction.resultSummary.copy,
-        stepSummaries: summarizeCompletedSteps(interaction, body.interaction)
+        stepSummaries: summarizeCompletedSteps(interaction, body.interaction),
+        fishTankOutcomes: plannedFishOutcomes
       });
     }
   );

@@ -1,4 +1,5 @@
 import { FishTankResourceType, type Prisma } from "@prisma/client";
+import type { ExistingLoopRewardsConfig } from "../config/runtime.js";
 
 export { FishTankResourceType };
 
@@ -20,6 +21,23 @@ export type FishTankResourceSummary = {
   totalHatchProgress: number;
 };
 
+export type ExistingRewardSourceType =
+  | "check_in_finish"
+  | "activity_completion"
+  | "daily_goal_claim"
+  | "weekly_goal_claim";
+
+export type ExistingLoopGrantMetadata = {
+  policyVersion: string;
+  sourceType: ExistingRewardSourceType;
+  resourceType: FishTankResourceType;
+  quantity: number;
+  label: string;
+  copy: string;
+  requestId?: string;
+  traceId?: string;
+};
+
 type PrismaClientLike = Pick<Prisma.TransactionClient, "fishTankResourceLedger">;
 
 export const resourceLabels: Record<FishTankResourceType, string> = {
@@ -36,6 +54,66 @@ function resourceCopy(resourceType: FishTankResourceType, quantity: number): str
     return `气泡 +${quantity}：鱼缸看起来更像在认真摸鱼。`;
   }
   return `孵化进度 +${quantity}：新邻居正在路上。`;
+}
+
+const existingRewardSourceLabels: Record<ExistingRewardSourceType, string> = {
+  check_in_finish: "打卡",
+  activity_completion: "活动",
+  daily_goal_claim: "每日目标",
+  weekly_goal_claim: "每周目标"
+};
+
+function existingRewardCopy(
+  sourceType: ExistingRewardSourceType,
+  resourceType: FishTankResourceType,
+  quantity: number
+): string {
+  const sourceLabel = existingRewardSourceLabels[sourceType];
+  const resourceLabel = resourceLabels[resourceType];
+  return `${sourceLabel}完成，${resourceLabel} +${quantity}。`;
+}
+
+export function resolveExistingLoopOutcomes(
+  sourceType: ExistingRewardSourceType,
+  config: ExistingLoopRewardsConfig
+): FishTankResourceOutcome[] {
+  const sourceConfig = config.sources[sourceKeyForSourceType(sourceType)];
+  if (!sourceConfig || sourceConfig.length === 0) {
+    return [];
+  }
+
+  return sourceConfig.map((outcome) => ({
+    resourceType: mapResourceType(outcome.resourceType),
+    quantity: outcome.quantity,
+    label: resourceLabels[mapResourceType(outcome.resourceType)],
+    copy: existingRewardCopy(sourceType, mapResourceType(outcome.resourceType), outcome.quantity)
+  }));
+}
+
+function sourceKeyForSourceType(
+  sourceType: ExistingRewardSourceType
+): keyof ExistingLoopRewardsConfig["sources"] {
+  switch (sourceType) {
+    case "check_in_finish":
+      return "checkInFinish";
+    case "activity_completion":
+      return "activityCompletion";
+    case "daily_goal_claim":
+      return "dailyGoalClaim";
+    case "weekly_goal_claim":
+      return "weeklyGoalClaim";
+  }
+}
+
+function mapResourceType(value: "food" | "bubble" | "hatch_progress"): FishTankResourceType {
+  switch (value) {
+    case "food":
+      return FishTankResourceType.food;
+    case "bubble":
+      return FishTankResourceType.bubble;
+    case "hatch_progress":
+      return FishTankResourceType.hatch_progress;
+  }
 }
 
 export function computeBeanDrawOutcomes(input: {
@@ -126,6 +204,86 @@ export async function grantResourcesFromBeanDraw(
   }
 
   return outcomes;
+}
+
+export async function grantExistingLoopRewards(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: {
+    sourceType: ExistingRewardSourceType;
+    sourceId: string;
+    policyVersion: string;
+    outcomes: FishTankResourceOutcome[];
+    requestId?: string;
+    traceId?: string;
+  }
+): Promise<FishTankResourceOutcome[]> {
+  if (input.outcomes.length === 0) {
+    return [];
+  }
+
+  const granted: FishTankResourceOutcome[] = [];
+
+  for (const outcome of input.outcomes) {
+    const idempotencyKey = `existing_reward:${input.sourceType}:${input.sourceId}:${outcome.resourceType}:${input.policyVersion}`;
+    const metadata: ExistingLoopGrantMetadata = {
+      policyVersion: input.policyVersion,
+      sourceType: input.sourceType,
+      resourceType: outcome.resourceType,
+      quantity: outcome.quantity,
+      label: outcome.label,
+      copy: outcome.copy,
+      requestId: input.requestId,
+      traceId: input.traceId
+    };
+
+    await prisma.fishTankResourceLedger.upsert({
+      where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      create: {
+        userId,
+        resourceType: outcome.resourceType,
+        quantity: outcome.quantity,
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        idempotencyKey,
+        metadata
+      },
+      update: {}
+    });
+
+    granted.push(outcome);
+  }
+
+  return granted;
+}
+
+export async function reconstructExistingLoopOutcomes(
+  prisma: PrismaClientLike,
+  userId: string,
+  input: {
+    sourceType: ExistingRewardSourceType;
+    sourceId: string;
+  }
+): Promise<FishTankResourceOutcome[]> {
+  const rows = await prisma.fishTankResourceLedger.findMany({
+    where: {
+      userId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      quantity: { gt: 0 }
+    },
+    orderBy: { createdAt: "asc" }
+  });
+
+  return rows.map((row) => {
+    const meta = (row.metadata ?? {}) as Partial<ExistingLoopGrantMetadata>;
+    return {
+      resourceType: row.resourceType,
+      quantity: row.quantity,
+      label: meta.label ?? resourceLabels[row.resourceType],
+      copy: meta.copy ?? existingRewardCopy(input.sourceType, row.resourceType, row.quantity)
+    };
+  });
 }
 
 export async function getHatchProgressBalance(
@@ -265,6 +423,27 @@ export class FishTankResourceError extends Error {
     super(message);
     this.name = "FishTankResourceError";
   }
+}
+
+export function buildExistingLoopAuditMetadata(input: {
+  sourceType: ExistingRewardSourceType;
+  sourceId: string;
+  policyVersion: string;
+  outcome: "granted" | "replayed" | "empty" | "rejected" | "rolled_back";
+  outcomes?: FishTankResourceOutcome[];
+  reason?: string;
+}) {
+  return {
+    sourceType: input.sourceType,
+    sourceId: input.sourceId,
+    policyVersion: input.policyVersion,
+    outcome: input.outcome,
+    resources: input.outcomes?.map((outcome) => ({
+      resourceType: outcome.resourceType,
+      quantity: outcome.quantity
+    })),
+    reason: input.reason ?? null
+  };
 }
 
 export async function getResourceSummary(

@@ -8,39 +8,69 @@ import {
   debitBubble,
   getHatchProgressBalance,
   grantResourcesFromBeanDraw,
-  getResourceSummary
+  getResourceSummary,
+  resolveExistingLoopOutcomes,
+  grantExistingLoopRewards,
+  reconstructExistingLoopOutcomes
 } from "./resources.js";
 
 describe("fish tank resources", () => {
+  type LedgerRow = {
+  userId: string;
+  resourceType: FishTankResourceType;
+  quantity: number;
+  sourceType: string;
+  sourceId: string | null;
+  idempotencyKey: string;
+  metadata: object;
+  createdAt: Date;
+};
+
   function createMockPrisma(initial: Array<{ resourceType: FishTankResourceType; quantity: number }> = []) {
-    const ledger: Array<{
-      userId: string;
-      resourceType: FishTankResourceType;
-      quantity: number;
-      idempotencyKey: string;
-    }> = initial.map((entry, index) => ({
+    const ledger: LedgerRow[] = initial.map((entry, index) => ({
       userId: "user-1",
       resourceType: entry.resourceType,
       quantity: entry.quantity,
-      idempotencyKey: `existing-${index}`
+      sourceType: "seed",
+      sourceId: null,
+      idempotencyKey: `existing-${index}`,
+      metadata: {},
+      createdAt: new Date(Date.now() + index)
     }));
 
     const mock = {
       fishTankResourceLedger: {
-        upsert: vi.fn(async ({ where, create }: { where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } }; create: { userId: string; resourceType: FishTankResourceType; quantity: number; sourceType: string; sourceId: string | null; idempotencyKey: string; metadata: object } }) => {
+        upsert: vi.fn(async ({ where, create }: { where: { userId_idempotencyKey: { userId: string; idempotencyKey: string } }; create: LedgerRow }) => {
           const existing = ledger.find(
             (entry) => entry.userId === where.userId_idempotencyKey.userId && entry.idempotencyKey === where.userId_idempotencyKey.idempotencyKey
           );
           if (existing) {
             return existing;
           }
-          const created = { userId: create.userId, resourceType: create.resourceType, quantity: create.quantity, idempotencyKey: where.userId_idempotencyKey.idempotencyKey };
+          const created: LedgerRow = {
+            ...create,
+            sourceId: create.sourceId ?? null,
+            metadata: create.metadata ?? {},
+            createdAt: new Date()
+          };
           ledger.push(created);
           return created;
         }),
-        groupBy: vi.fn(async () => {
+        findMany: vi.fn(async ({ where }: { where: { userId?: string; sourceType?: string; sourceId?: string | null; quantity?: { gt?: number } }; orderBy?: { createdAt: "asc" | "desc" } }) => {
+          let rows = ledger.filter((entry) => {
+            if (where.userId !== undefined && entry.userId !== where.userId) return false;
+            if (where.sourceType !== undefined && entry.sourceType !== where.sourceType) return false;
+            if (where.sourceId !== undefined && entry.sourceId !== where.sourceId) return false;
+            if (where.quantity?.gt !== undefined && !(entry.quantity > where.quantity.gt)) return false;
+            return true;
+          });
+          rows = [...rows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+          return rows;
+        }),
+        groupBy: vi.fn(async ({ where }: { where?: { userId?: string }; by: string[] }) => {
           const groups = new Map<FishTankResourceType, number>();
           for (const entry of ledger) {
+            if (where?.userId !== undefined && entry.userId !== where.userId) continue;
             groups.set(entry.resourceType, (groups.get(entry.resourceType) ?? 0) + entry.quantity);
           }
           return Array.from(groups.entries()).map(([resourceType, quantity]) => ({
@@ -355,4 +385,176 @@ describe("fish tank resources", () => {
       expect(summary.totalBubbles).toBe(4);
     });
   });
+
+  describe("existing loop policy resolver", () => {
+    it("resolves default check-in outcome", () => {
+      const config = defaultExistingLoopConfig();
+      const outcomes = resolveExistingLoopOutcomes("check_in_finish", config);
+      expect(outcomes).toEqual([
+        {
+          resourceType: FishTankResourceType.food,
+          quantity: 1,
+          label: "鱼食",
+          copy: "打卡完成，鱼食 +1。"
+        }
+      ]);
+    });
+
+    it("resolves default weekly goal outcome", () => {
+      const config = defaultExistingLoopConfig();
+      const outcomes = resolveExistingLoopOutcomes("weekly_goal_claim", config);
+      expect(outcomes).toEqual([
+        {
+          resourceType: FishTankResourceType.hatch_progress,
+          quantity: 2,
+          label: "孵化进度",
+          copy: "每周目标完成，孵化进度 +2。"
+        }
+      ]);
+    });
+
+    it("returns empty outcomes for disabled source", () => {
+      const config = defaultExistingLoopConfig();
+      config.sources.activityCompletion = [];
+      const outcomes = resolveExistingLoopOutcomes("activity_completion", config);
+      expect(outcomes).toEqual([]);
+    });
+  });
+
+  describe("existing loop grant helper", () => {
+    it("grants multi-type outcomes in one call", async () => {
+      const prisma = createMockPrisma();
+      const outcomes = await grantExistingLoopRewards(prisma, "user-1", {
+        sourceType: "weekly_goal_claim",
+        sourceId: "period-1",
+        policyVersion: "v1",
+        outcomes: [
+          { resourceType: FishTankResourceType.hatch_progress, quantity: 2, label: "孵化进度", copy: "每周目标完成，孵化进度 +2。" }
+        ],
+        requestId: "req-1",
+        traceId: "trace-1"
+      });
+
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]?.quantity).toBe(2);
+      expect(prisma.fishTankResourceLedger.upsert).toHaveBeenCalledTimes(1);
+    });
+
+    it("is idempotent for same source, resource, and policy version", async () => {
+      const prisma = createMockPrisma();
+      const input = {
+        sourceType: "check_in_finish" as const,
+        sourceId: "session-1",
+        policyVersion: "v1",
+        outcomes: [
+          { resourceType: FishTankResourceType.food, quantity: 1, label: "鱼食", copy: "打卡完成，鱼食 +1。" }
+        ]
+      };
+
+      await grantExistingLoopRewards(prisma, "user-1", input);
+      await grantExistingLoopRewards(prisma, "user-1", input);
+
+      const summary = await getResourceSummary(prisma, "user-1");
+      expect(summary.totalFood).toBe(1);
+    });
+
+    it("isolates grants between users", async () => {
+      const prisma = createMockPrisma();
+      await grantExistingLoopRewards(prisma, "user-1", {
+        sourceType: "check_in_finish",
+        sourceId: "session-1",
+        policyVersion: "v1",
+        outcomes: [
+          { resourceType: FishTankResourceType.food, quantity: 1, label: "鱼食", copy: "打卡完成，鱼食 +1。" }
+        ]
+      });
+      await grantExistingLoopRewards(prisma, "user-2", {
+        sourceType: "check_in_finish",
+        sourceId: "session-2",
+        policyVersion: "v1",
+        outcomes: [
+          { resourceType: FishTankResourceType.food, quantity: 1, label: "鱼食", copy: "打卡完成，鱼食 +1。" }
+        ]
+      });
+
+      const user1Summary = await getResourceSummary(prisma, "user-1");
+      expect(user1Summary.totalFood).toBe(1);
+    });
+
+    it("returns empty array when outcomes are empty", async () => {
+      const prisma = createMockPrisma();
+      const outcomes = await grantExistingLoopRewards(prisma, "user-1", {
+        sourceType: "activity_completion",
+        sourceId: "assignment-1",
+        policyVersion: "v1",
+        outcomes: []
+      });
+      expect(outcomes).toEqual([]);
+      expect(prisma.fishTankResourceLedger.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("existing loop replay reconstruction", () => {
+    it("reconstructs original outcomes from persisted rows", async () => {
+      const prisma = createMockPrisma();
+      const original = [
+        { resourceType: FishTankResourceType.bubble, quantity: 1, label: "气泡", copy: "活动完成，气泡 +1。" }
+      ];
+      await grantExistingLoopRewards(prisma, "user-1", {
+        sourceType: "activity_completion",
+        sourceId: "assignment-1",
+        policyVersion: "v1",
+        outcomes: original
+      });
+
+      const replayed = await reconstructExistingLoopOutcomes(prisma, "user-1", {
+        sourceType: "activity_completion",
+        sourceId: "assignment-1"
+      });
+
+      expect(replayed).toEqual(original);
+    });
+
+    it("returns empty outcomes for historical source without ledger rows", async () => {
+      const prisma = createMockPrisma();
+      const outcomes = await reconstructExistingLoopOutcomes(prisma, "user-1", {
+        sourceType: "check_in_finish",
+        sourceId: "old-session"
+      });
+      expect(outcomes).toEqual([]);
+    });
+
+    it("reconstructs outcomes across policy versions", async () => {
+      const prisma = createMockPrisma();
+      await grantExistingLoopRewards(prisma, "user-1", {
+        sourceType: "daily_goal_claim",
+        sourceId: "period-1",
+        policyVersion: "v1",
+        outcomes: [
+          { resourceType: FishTankResourceType.hatch_progress, quantity: 1, label: "孵化进度", copy: "每日目标完成，孵化进度 +1。" }
+        ]
+      });
+
+      // A retry under a new policy version would still find the original v1 row.
+      const replayed = await reconstructExistingLoopOutcomes(prisma, "user-1", {
+        sourceType: "daily_goal_claim",
+        sourceId: "period-1"
+      });
+
+      expect(replayed[0]?.quantity).toBe(1);
+      expect(replayed[0]?.copy).toContain("每日目标完成");
+    });
+  });
 });
+
+function defaultExistingLoopConfig() {
+  return {
+    policyVersion: "v1",
+    sources: {
+      checkInFinish: [{ resourceType: "food" as const, quantity: 1 }],
+      activityCompletion: [{ resourceType: "bubble" as const, quantity: 1 }],
+      dailyGoalClaim: [{ resourceType: "hatch_progress" as const, quantity: 1 }],
+      weeklyGoalClaim: [{ resourceType: "hatch_progress" as const, quantity: 2 }]
+    }
+  };
+}

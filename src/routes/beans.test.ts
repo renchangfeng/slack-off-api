@@ -1,7 +1,7 @@
 import { BeanRarity, BeanTheme, RewardSourceType, RewardType } from "@prisma/client";
 import Fastify from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { RuntimeConfig } from "../config/runtime.js";
+import { createTestRuntimeConfig } from "../config/test-utils.js";
 import { registerConfig } from "../plugins/config.js";
 import { registerObservability } from "../plugins/observability.js";
 import { registerBeanRoutes } from "./beans.js";
@@ -10,35 +10,7 @@ const userId = "11111111-1111-4111-8111-111111111111";
 const otherUserId = "22222222-2222-4222-8222-222222222222";
 const beanId = "33333333-3333-4333-8333-333333333333";
 
-const runtimeConfig: RuntimeConfig = {
-  rateLimits: {
-    global: { max: 1000, timeWindow: "1 minute" },
-    otp: { max: 1000, timeWindow: "1 minute" },
-    checkIns: { max: 1000, timeWindow: "1 minute" },
-    activities: { max: 1000, timeWindow: "1 minute" },
-    beanDraws: { max: 1000, timeWindow: "1 minute" },
-    leaderboardReads: { max: 1000, timeWindow: "1 minute" },
-    profileUpdates: { max: 1000, timeWindow: "1 minute" },
-    fishTank: { max: 1000, timeWindow: "1 minute" }
-  },
-  auth: { requireEmailVerified: false },
-  checkIns: {
-    minRewardDurationSeconds: 60,
-    maxSessionSeconds: 60 * 45,
-    dailyRewardedSessionCap: 5,
-    scorePerEligibleMinute: 1,
-    drawProgressPerSession: 1
-  },
-  beans: { drawProgressPerChance: 3 },
-  fishTank: {
-    starterFishCode: "starter_goldfish",
-    feedCooldownSeconds: 4 * 60 * 60,
-    bubbleCooldownSeconds: 60 * 60,
-    feedCost: 1,
-    bubbleCost: 1,
-    hatchProgressCost: 3
-  }
-};
+const runtimeConfig = createTestRuntimeConfig();
 
 describe("bean routes", () => {
   let store: TestStore;

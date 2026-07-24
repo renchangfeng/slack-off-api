@@ -95,7 +95,7 @@ components:
           type: boolean
     CheckInFinishResult:
       type: object
-      required: [session, reward]
+      required: [session, reward, fishTankOutcomes]
       properties:
         session:
           $ref: "#/components/schemas/CheckInSession"
@@ -115,6 +115,10 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/AchievementUnlock"
+        fishTankOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankResourceOutcome"
     RewardSummary:
       type: object
       required: [score, drawProgressGranted, drawProgress, drawChancesGranted, achievementsUnlocked]
@@ -300,7 +304,7 @@ components:
             $ref: "#/components/schemas/ProgressionGoal"
     ProgressionClaimResult:
       type: object
-      required: [period, awarded, claimedAt, reward, progression]
+      required: [period, awarded, claimedAt, reward, progression, fishTankOutcomes]
       properties:
         period:
           type: string
@@ -340,6 +344,10 @@ components:
               type: integer
             leveledUp:
               type: boolean
+        fishTankOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankResourceOutcome"
     ProgressionSummary:
       type: object
       required:
@@ -1334,7 +1342,7 @@ components:
           format: uuid
     ActivityCompleteResult:
       type: object
-      required: [assignment, reward, feedback, resultTitle, resultCopy]
+      required: [assignment, reward, feedback, resultTitle, resultCopy, fishTankOutcomes]
       properties:
         assignment:
           $ref: "#/components/schemas/ActivityAssignment"
@@ -1366,6 +1374,10 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/AchievementUnlock"
+        fishTankOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/FishTankResourceOutcome"
     FishTankSummary:
       type: object
       required: [initialized, fish, displayedFish, eligibleFish, careAvailability, hatchAvailability, collection, mood, moodCopy, nextAction, resourceSummary, costs, guidance, decorations]
@@ -1927,6 +1939,75 @@ paths:
                     $ref: "#/components/schemas/CheckInFinishResult"
                   error:
                     type: "null"
+              examples:
+                granted:
+                  summary: Eligible check-in grants food
+                  value:
+                    data:
+                      session:
+                        id: "33333333-3333-4333-8333-333333333333"
+                        status: completed
+                        startedAt: "2026-07-16T10:00:00.000Z"
+                        endedAt: "2026-07-16T10:05:00.000Z"
+                        durationSeconds: 300
+                        eligibleDurationSeconds: 300
+                        rewarded: true
+                      reward:
+                        score: 5
+                        drawProgress: 1
+                        drawChancesGranted: 0
+                        rewarded: true
+                        achievementsUnlocked: []
+                      fishTankOutcomes:
+                        - resourceType: food
+                          quantity: 1
+                          label: "鱼食"
+                          copy: "打卡完成，鱼食 +1。"
+                    error: null
+                unrewarded:
+                  summary: Below-minimum check-in grants nothing
+                  value:
+                    data:
+                      session:
+                        id: "33333333-3333-4333-8333-333333333333"
+                        status: completed
+                        startedAt: "2026-07-16T10:00:00.000Z"
+                        endedAt: "2026-07-16T10:00:10.000Z"
+                        durationSeconds: 10
+                        eligibleDurationSeconds: 0
+                        rewarded: false
+                      reward:
+                        score: 0
+                        drawProgress: 0
+                        drawChancesGranted: 0
+                        rewarded: false
+                        achievementsUnlocked: []
+                      fishTankOutcomes: []
+                    error: null
+                replay:
+                  summary: Repeated finish returns original fish outcome
+                  value:
+                    data:
+                      session:
+                        id: "33333333-3333-4333-8333-333333333333"
+                        status: completed
+                        startedAt: "2026-07-16T10:00:00.000Z"
+                        endedAt: "2026-07-16T10:05:00.000Z"
+                        durationSeconds: 300
+                        eligibleDurationSeconds: 300
+                        rewarded: true
+                      reward:
+                        score: 0
+                        drawProgress: 0
+                        drawChancesGranted: 0
+                        rewarded: true
+                        achievementsUnlocked: []
+                      fishTankOutcomes:
+                        - resourceType: food
+                          quantity: 1
+                          label: "鱼食"
+                          copy: "打卡完成，鱼食 +1。"
+                    error: null
         "404":
           description: Check-in not found
   /v1/check-ins/active:
@@ -2106,6 +2187,85 @@ paths:
                     $ref: "#/components/schemas/ProgressionClaimResult"
                   error:
                     type: "null"
+              examples:
+                dailyGranted:
+                  summary: Daily claim grants hatch progress
+                  value:
+                    data:
+                      period: daily
+                      awarded: true
+                      claimedAt: "2026-07-16T12:00:00.000Z"
+                      reward:
+                        score: 15
+                        drawProgress: 1
+                        drawChancesGranted: 0
+                      progression:
+                        level: 2
+                        experience: 210
+                        currentLevelExperience: 200
+                        nextLevelExperience: 300
+                        progressPercent: 10
+                        previousLevel: 2
+                        currentLevel: 2
+                        leveledUp: false
+                      fishTankOutcomes:
+                        - resourceType: hatch_progress
+                          quantity: 1
+                          label: "孵化进度"
+                          copy: "每日目标完成，孵化进度 +1。"
+                    error: null
+                weeklyGranted:
+                  summary: Weekly claim grants extra hatch progress
+                  value:
+                    data:
+                      period: weekly
+                      awarded: true
+                      claimedAt: "2026-07-16T12:00:00.000Z"
+                      reward:
+                        score: 50
+                        drawProgress: 2
+                        drawChancesGranted: 1
+                      progression:
+                        level: 3
+                        experience: 245
+                        currentLevelExperience: 0
+                        nextLevelExperience: 400
+                        progressPercent: 0
+                        previousLevel: 2
+                        currentLevel: 3
+                        leveledUp: true
+                      fishTankOutcomes:
+                        - resourceType: hatch_progress
+                          quantity: 2
+                          label: "孵化进度"
+                          copy: "每周目标完成，孵化进度 +2。"
+                    error: null
+                replay:
+                  summary: Repeated claim returns original fish outcome
+                  value:
+                    data:
+                      period: weekly
+                      awarded: false
+                      claimedAt: "2026-07-16T12:00:00.000Z"
+                      reward:
+                        score: 0
+                        drawProgress: 0
+                        drawChancesGranted: 0
+                      progression:
+                        level: 3
+                        experience: 245
+                        currentLevelExperience: 0
+                        nextLevelExperience: 400
+                        progressPercent: 0
+                        previousLevel: 2
+                        currentLevel: 3
+                        leveledUp: false
+                      fishTankOutcomes:
+                        - resourceType: hatch_progress
+                          quantity: 2
+                          label: "孵化进度"
+                          copy: "每周目标完成，孵化进度 +2。"
+                    error: null
         "409":
           description: Goal period is incomplete
   /v1/beans/collection:
@@ -2416,6 +2576,93 @@ paths:
                     $ref: "#/components/schemas/ActivityCompleteResult"
                   error:
                     type: "null"
+              examples:
+                granted:
+                  summary: Rewarded activity grants bubble
+                  value:
+                    data:
+                      assignment:
+                        assignmentId: "55555555-5555-4555-8555-555555555555"
+                        code: match_three_rounds
+                        title: "完成消消乐 3 关"
+                        status: completed
+                        rewarded: true
+                        rewardPreview:
+                          score: 8
+                          drawProgress: 1
+                      reward:
+                        score: 8
+                        drawProgress: 1
+                        drawChancesGranted: 0
+                        rewarded: true
+                        reason: null
+                        achievementsUnlocked: []
+                      feedback: "手感不错，鱼缸也冒了个泡。"
+                      resultTitle: "三关过完"
+                      resultCopy: "眼睛休息够了，鱼缸库存 +1。"
+                      stepSummaries: []
+                      fishTankOutcomes:
+                        - resourceType: bubble
+                          quantity: 1
+                          label: "气泡"
+                          copy: "活动完成，气泡 +1。"
+                    error: null
+                dailyLimit:
+                  summary: Daily limit reached grants nothing
+                  value:
+                    data:
+                      assignment:
+                        assignmentId: "55555555-5555-4555-8555-555555555555"
+                        code: match_three_rounds
+                        title: "完成消消乐 3 关"
+                        status: completed
+                        rewarded: false
+                        rewardPreview:
+                          score: 8
+                          drawProgress: 1
+                      reward:
+                        score: 0
+                        drawProgress: 0
+                        drawChancesGranted: 0
+                        rewarded: false
+                        reason: DAILY_LIMIT_REACHED
+                        achievementsUnlocked: []
+                      feedback: "今日已经完成过这个任务，明天再来。"
+                      resultTitle: "今日次数已用完"
+                      resultCopy: "每日上限到了，但活动记录已留下。"
+                      stepSummaries: []
+                      fishTankOutcomes: []
+                    error: null
+                replay:
+                  summary: Repeated completion returns original fish outcome
+                  value:
+                    data:
+                      assignment:
+                        assignmentId: "55555555-5555-4555-8555-555555555555"
+                        code: match_three_rounds
+                        title: "完成消消乐 3 关"
+                        status: completed
+                        rewarded: true
+                        rewardPreview:
+                          score: 8
+                          drawProgress: 1
+                      reward:
+                        score: 0
+                        drawProgress: 0
+                        drawChancesGranted: 0
+                        rewarded: true
+                        reason: ALREADY_COMPLETED
+                        achievementsUnlocked: []
+                      feedback: "手感不错，鱼缸也冒了个泡。"
+                      resultTitle: "三关过完"
+                      resultCopy: "眼睛休息够了，鱼缸库存 +1。"
+                      stepSummaries: []
+                      fishTankOutcomes:
+                        - resourceType: bubble
+                          quantity: 1
+                          label: "气泡"
+                          copy: "活动完成，气泡 +1。"
+                    error: null
         "404":
           description: Activity assignment not found
         "409":

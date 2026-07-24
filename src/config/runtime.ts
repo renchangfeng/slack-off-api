@@ -1,9 +1,28 @@
 import { z } from "zod";
 import { env } from "./env.js";
 
+const MAX_EXISTING_LOOP_REWARD_QUANTITY = 100;
+
 const rateLimitPolicySchema = z.object({
   max: z.number().int().positive(),
   timeWindow: z.string()
+});
+
+const fishTankResourceTypeSchema = z.enum(["food", "bubble", "hatch_progress"]);
+
+const existingLoopRewardOutcomeSchema = z.object({
+  resourceType: fishTankResourceTypeSchema,
+  quantity: z.number().int().min(1).max(MAX_EXISTING_LOOP_REWARD_QUANTITY)
+});
+
+const existingLoopRewardsSchema = z.object({
+  policyVersion: z.string().min(1).max(64),
+  sources: z.object({
+    checkInFinish: z.array(existingLoopRewardOutcomeSchema).max(8),
+    activityCompletion: z.array(existingLoopRewardOutcomeSchema).max(8),
+    dailyGoalClaim: z.array(existingLoopRewardOutcomeSchema).max(8),
+    weeklyGoalClaim: z.array(existingLoopRewardOutcomeSchema).max(8)
+  })
 });
 
 const runtimeConfigSchema = z.object({
@@ -36,12 +55,20 @@ const runtimeConfigSchema = z.object({
     bubbleCooldownSeconds: z.number().int().positive(),
     feedCost: z.number().int().positive(),
     bubbleCost: z.number().int().positive(),
-    hatchProgressCost: z.number().int().positive()
+    hatchProgressCost: z.number().int().positive(),
+    existingLoopRewards: existingLoopRewardsSchema
   })
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 export type RateLimitPolicy = z.infer<typeof rateLimitPolicySchema>;
+export type ExistingLoopRewardOutcomeConfig = z.infer<typeof existingLoopRewardOutcomeSchema>;
+export type ExistingLoopRewardsConfig = z.infer<typeof existingLoopRewardsSchema>;
+export { MAX_EXISTING_LOOP_REWARD_QUANTITY };
+
+export function validateRuntimeConfig(input: unknown): RuntimeConfig {
+  return runtimeConfigSchema.parse(input);
+}
 
 const defaults: RuntimeConfig = {
   rateLimits: {
@@ -73,7 +100,16 @@ const defaults: RuntimeConfig = {
     bubbleCooldownSeconds: 60 * 60,
     feedCost: 1,
     bubbleCost: 1,
-    hatchProgressCost: 3
+    hatchProgressCost: 3,
+    existingLoopRewards: {
+      policyVersion: "v1",
+      sources: {
+        checkInFinish: [{ resourceType: "food", quantity: 1 }],
+        activityCompletion: [{ resourceType: "bubble", quantity: 1 }],
+        dailyGoalClaim: [{ resourceType: "hatch_progress", quantity: 1 }],
+        weeklyGoalClaim: [{ resourceType: "hatch_progress", quantity: 2 }]
+      }
+    }
   }
 };
 
